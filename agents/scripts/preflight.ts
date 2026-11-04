@@ -3,7 +3,7 @@ import { formatEther, parseEther, type Address } from "viem";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AGENTS_DIR, account, readEnv } from "../src/env.js";
-import { CORE_ABI, CORE_ADDRESS, FLOORS, config, publicClient, robotConfig } from "../src/chain.js";
+import { CORE_ABI, CORE_ADDRESS, FLOORS, apiBase, config, publicClient, robotConfig } from "../src/chain.js";
 import { workers } from "../src/workers.js";
 
 let failed = 0;
@@ -58,9 +58,10 @@ ok(workers().size > 0, "worker registry loaded", [...workers().keys()].join(", "
 const env = readEnv();
 ok(!!env.MONAID_API_TOKEN, "MONAID_API_TOKEN set", "(agents/.env)");
 const apiCfg = (config as unknown as { api: { host: string; port: number } }).api;
-const BASE = `http://${apiCfg.host === "0.0.0.0" ? "127.0.0.1" : apiCfg.host}:${apiCfg.port}`;
+const BASE = apiBase();
+const remote = !!process.env.MONAID_API_URL;
 const health = await fetch(`${BASE}/health`).then((r) => r.json()).catch(() => null);
-ok(!!health?.ok && apiCfg.port === 4000, "API up on port 4000", `${BASE} (bridge: AGENTS_API=http://<this laptop>:${apiCfg.port})`);
+ok(!!health?.ok && (remote || apiCfg.port === 4000), remote ? "API up (public URL)" : "API up on port 4000", `${BASE} (bridge: AGENTS_API=${BASE})`);
 if (health?.ok) {
   const robots = await fetch(`${BASE}/robots`, { headers: { "x-monaid-token": env.MONAID_API_TOKEN ?? "" } }).then((r) => r.json()).catch(() => null);
   ok(!!robots?.ok, "API token accepted");
