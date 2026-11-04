@@ -1,0 +1,29 @@
+# Render Blueprint for the Monaid Agents API (agents/). Secrets are NOT in this file: every key below marked
+# `sync: false` is entered by hand in the Render dashboard when the Blueprint is applied.
+# The server never needs DEPLOYER_PRIVATE_KEY (funding and reset:demo run from the owner's laptop).
+services:
+  - type: web
+    name: monaid-agents
+    runtime: node
+    region: singapore
+    # The free plan sleeps after ~15 min idle, which stops the expiry watcher (fail path) and adds a ~50 s cold start.
+    plan: starter
+    branch: main
+    autoDeploy: true
+    buildCommand: cd agents && npm ci
+    startCommand: cd agents && npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: AGENT_1_PRIVATE_KEY
+        sync: false
+      - key: AGENT_2_PRIVATE_KEY
+        sync: false
+      - key: MONAID_API_TOKEN
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      # Portal origin(s), comma-separated, e.g. https://portal.example.com. "*" = any origin (token still required).
+      - key: CORS_ORIGIN
+        value: "*"
