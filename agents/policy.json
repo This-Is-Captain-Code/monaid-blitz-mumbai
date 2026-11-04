@@ -1,0 +1,14 @@
+{
+  "_note": "Off-chain guardrails per robot (MON amounts as strings). Second layer under MonaidCore's on-chain caps (maxPayout 0.1 MON). Checked before every robot-agent send; blocked actions are logged with the reason.",
+  "defaults": {
+    "maxPayoutPerJob": "0.05",
+    "maxSpendPerDay": "0.1",
+    "maxOpenJobs": 2,
+    "ownerApprovalAbove": "0.02",
+    "allowedActions": ["postJob", "claim", "settle", "expire", "cancel"]
+  },
+  "robots": {
+    "1": {},
+    "2": {}
+  }
+}

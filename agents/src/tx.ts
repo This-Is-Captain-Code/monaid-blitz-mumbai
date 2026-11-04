@@ -26,6 +26,8 @@ import { CORE_ABI, RECEIPT_POLL_MS, publicClient, txLink, walletClient } from ".
 import { FloorError, assertDeployerCanSpend } from "./funding.js";
 import { getFees } from "./fees.js";
 import { config } from "./chain.js";
+import { KillSwitchError, assertNotKilled } from "./killswitch.js";
+import { bus } from "./bus.js";
 
 /** sendTx tuning from agents/config.json → tx. */
 export const TX_CFG = {
@@ -56,6 +58,8 @@ export type TxRequest = {
   args?: readonly unknown[];
   // ...or raw data
   data?: Hex;
+  /** Demo only: with a fixed gas limit, send WITHOUT the pre-check, so a contract revert lands on-chain. */
+  skipPreflight?: boolean;
 };
 
 export type TxResult = {
@@ -194,7 +198,9 @@ const jsonSafe = (v: unknown): unknown =>
 
 export function audit(entry: Record<string, unknown>) {
   mkdirSync(join(AGENTS_DIR, "logs"), { recursive: true });
-  appendFileSync(AUDIT_LOG, JSON.stringify(jsonSafe({ time: new Date().toISOString(), ...entry })) + "\n");
+  const line = jsonSafe({ time: new Date().toISOString(), ...entry }) as Record<string, unknown>;
+  appendFileSync(AUDIT_LOG, JSON.stringify(line) + "\n");
+  bus.emit("feed", { ...line, type: "tx", robot: (line.robot as string | null) ?? undefined });
 }
 
 // ---------------- sendTx ----------------
@@ -243,7 +249,10 @@ async function sendNow(req: TxRequest, opts: { forceEstimate?: boolean } = {}): 
   };
 
   try {
-    // 0. DEPLOYER hard floor, checked before anything else (re-checked with real gas after estimate)
+    // 0. global kill switch: nothing is sent while it's engaged
+    assertNotKilled();
+
+    // DEPLOYER hard floor, checked before anything else (re-checked with real gas after estimate)
     if (req.wallet === "DEPLOYER" && value > 0n) await assertDeployerCanSpend(value, 0n, `${req.action} (${formatEther(value)} MON)`);
 
     const simulate = async () => {
@@ -261,7 +270,7 @@ async function sendNow(req: TxRequest, opts: { forceEstimate?: boolean } = {}): 
     const fixed = opts.forceEstimate ? undefined : TX_CFG.fixedGas[req.action];
     if (fixed) {
       gas = BigInt(fixed);
-      if (TX_CFG.fixedGasPreflight) {
+      if (TX_CFG.fixedGasPreflight && !req.skipPreflight) {
         // Simulate WITH the fixed limit, so a too-small limit shows up here (no gas spent), not on-chain.
         try {
           await withNetworkRetry("simulate", () => publicClient.call({ account: from, to: req.to, data, value, gas }));
@@ -345,6 +354,10 @@ async function sendNow(req: TxRequest, opts: { forceEstimate?: boolean } = {}): 
     }
   } catch (e) {
     if (e instanceof TxRevertedError) throw e;
+    if (e instanceof KillSwitchError) {
+      audit({ ...base, result: "blocked", stage: "kill_switch", error: e.message });
+      throw e;
+    }
     if (e instanceof FloorError) {
       audit({ ...base, result: "refused", stage: "floor", error: e.message.split("\n")[0] });
       throw e;
