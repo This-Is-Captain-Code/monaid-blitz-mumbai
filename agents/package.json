@@ -26,13 +26,12 @@
     "check:muse": "tsx scripts/check-muse.ts",
     "reset:demo": "tsx scripts/reset-demo.ts",
     "preflight": "tsx scripts/preflight.ts",
-    "check:claude": "tsx scripts/check-muse.ts"
+    "check:claude": "tsx scripts/check-muse.ts",
+    "check:agent-decision": "tsx scripts/check-muse.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^1.4.0",
     "dotenv": "^18.0.9",
-    "viem": "^2.57.16",
-    "zod": "^4.6.7"
+    "viem": "^2.57.16"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",

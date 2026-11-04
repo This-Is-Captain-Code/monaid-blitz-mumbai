@@ -184,7 +184,7 @@ export class MonaidService {
     if (!/^\d{1,18}$/.test(jobId)) throw new ApiError(400, "BAD_REQUEST", "job id must be a number");
     const job = getJobRecord(jobId);
     if (!job) throw new ApiError(404, "UNKNOWN_JOB", `No job ${jobId} on the current MonaidCore`);
-    const worker = resolveWorker(body.worker);
+    const worker = resolveWorker(typeof body.worker === "string" ? body.worker.trim().toLowerCase() : body.worker);
     const agent = this.agent(job.robot);
     const tx = await agent.acceptClaim(jobId, worker.address, `portal claim by ${worker.id}`);
     const rec = getJobRecord(jobId)!;
@@ -227,20 +227,20 @@ export class MonaidService {
           { id: "reject", label: "Reject: keep the MON; the robot waits for the owner" },
         ],
       });
-      if (muse.source !== "claude") {
-        return { ok: true as const, mode: "approval" as const, approvalId: a.id, claude: muse, applied: null, note: "Claude fell back: the approval stays pending — owner decides (POST /owner/decide)" };
+      if (muse.source !== "agent") {
+        return { ok: true as const, mode: "approval" as const, approvalId: a.id, agent: muse, applied: null, note: `${muse.by} fell back: the approval stays pending — owner decides (POST /owner/decide)` };
       }
       try {
         const applied = await this.decide({ approvalId: a.id, decision: muse.choice });
-        return { ok: true as const, mode: "approval" as const, approvalId: a.id, claude: muse, applied };
+        return { ok: true as const, mode: "approval" as const, approvalId: a.id, agent: muse, applied };
       } catch (e) {
         // Muse's pick still had to pass every guardrail; report what stopped it.
-        return { ok: true as const, mode: "approval" as const, approvalId: a.id, claude: muse, applied: { ok: false as const, error: (e as Error).name, message: (e as Error).message } };
+        return { ok: true as const, mode: "approval" as const, approvalId: a.id, agent: muse, applied: { ok: false as const, error: (e as Error).name, message: (e as Error).message } };
       }
     }
     try {
       const muse = await museDecide({ question: body.question, options: body.options });
-      return { ok: true as const, mode: "advice" as const, claude: muse };
+      return { ok: true as const, mode: "advice" as const, agent: muse };
     } catch (e) {
       throw new ApiError(400, "BAD_REQUEST", `decision: ${(e as Error).message}`);
     }

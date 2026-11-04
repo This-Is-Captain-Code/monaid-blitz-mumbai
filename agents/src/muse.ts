@@ -1,28 +1,37 @@
-// The owner's decision agent (shown to people as "Claude"; the module keeps its working name "muse"). It DECIDES; it never sends transactions.
-// Given a decision (a question + options we built) and the owner's context, it asks Claude to pick exactly one
-// option id with a one-line reason, as schema-constrained JSON. Anything else — invalid output, empty reason,
-// refusal, no API key, slower than the timeout, an API error — falls back to "owner decides".
-// Whatever Muse picks is then applied by the normal code path, so every guardrail and on-chain cap still applies.
+// The owner's decision agent ("Claude" on screens when the configured model is a Claude model, else "AI agent").
+// It DECIDES; it never sends transactions. Given a decision (a question + options we built) and the owner's context,
+// it asks a model via OpenRouter's OpenAI-compatible chat completions API to pick exactly one option id with a
+// one-line reason, as JSON. Anything else — invalid output, empty reason, refusal, no API key, slower than the
+// timeout, an HTTP/network error — falls back to "owner decides". Whatever it picks is then applied by the normal
+// code path, so every guardrail and on-chain cap still applies.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import Anthropic from "@anthropic-ai/sdk";
-import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
-import { z } from "zod";
 import { AGENTS_DIR, readEnv } from "./env.js";
 import { config } from "./chain.js";
 import { bus } from "./bus.js";
 
-type MuseCfg = { model: string; effort: "low" | "medium" | "high"; timeoutMs: number; maxTokens: number; ownerContextFile: string };
+type MuseCfg = {
+  provider: "openrouter";
+  endpoint: string;
+  model: string;
+  reasoningEffort: "none" | "low" | "medium" | "high";
+  timeoutMs: number;
+  maxTokens: number;
+  ownerContextFile: string;
+};
 export const MUSE_CFG = (config as unknown as { muse: MuseCfg }).muse;
+
+/** What people see: "Claude" for a Claude model, otherwise "AI agent". */
+export const agentLabel = (model = MUSE_CFG.model) => (/(^|\/)claude/i.test(model) ? "Claude" : "AI agent");
 
 export type MuseOption = { id: string; label: string; detail?: string };
 export type MuseDecision = { question: string; options: MuseOption[] };
 
 export type MuseResult =
-  | { source: "claude"; choice: string; reason: string; ms: number; model: string }
-  | { source: "owner_decides"; fallback: "no_api_key" | "timeout" | "invalid_output" | "refusal" | "api_error"; detail: string; ms: number };
+  | { source: "agent"; by: string; choice: string; reason: string; ms: number; model: string }
+  | { source: "owner_decides"; by: string; fallback: "no_api_key" | "timeout" | "invalid_output" | "refusal" | "api_error"; detail: string; ms: number };
 
-/** The exact system prompt (kept stable so it can be cached and audited). */
+/** The exact system prompt. */
 export const MUSE_SYSTEM_PROMPT = [
   "You are the decision agent for the owner of a small fleet of repair robots called Monaid.",
   "You receive one decision as JSON: a question, a list of options (each with an id), and the owner's context (calendar and preferences).",
@@ -61,50 +70,96 @@ export function ownerContext(): unknown {
   }
 }
 
-/** What the model is called with — injectable for tests. Returns parsed {choice, reason} or a refusal marker. */
+/** Errors with a known fallback category. */
+export class AgentHttpError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+    this.name = "AgentHttpError";
+  }
+}
+export class AgentOutputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentOutputError";
+  }
+}
+
+/** What the model is called with — injectable for tests. */
 export type ModelCall = (decision: MuseDecision, signal: AbortSignal) => Promise<{ refusal: true } | { choice: unknown; reason: unknown; model: string }>;
 
-let client: Anthropic | undefined;
+const apiKey = () => readEnv().OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY || "";
 
-/** Real Claude call: structured output constrained to the option ids. */
-export const claudeCall: ModelCall = async (decision, signal) => {
-  const apiKey = readEnv().ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY;
-  client ??= new Anthropic({ apiKey, maxRetries: 0 }); // a retry would blow the deadline; we fall back instead
-  const ids = decision.options.map((o) => o.id) as [string, ...string[]];
-  const schema = z.object({ choice: z.enum(ids), reason: z.string() });
-
-  const response = await client.beta.messages.parse(
-    {
-      model: MUSE_CFG.model,
-      max_tokens: MUSE_CFG.maxTokens,
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default", // on a safety refusal the API retries on a fallback model in the same call
-      system: MUSE_SYSTEM_PROMPT,
-      output_config: { effort: MUSE_CFG.effort, format: betaZodOutputFormat(schema) },
-      messages: [{ role: "user", content: JSON.stringify({ decision, ownerContext: ownerContext() }, null, 2) }],
+/** The request body sent to OpenRouter (exported so tests can check it). */
+export function openrouterBody(decision: MuseDecision) {
+  return {
+    model: MUSE_CFG.model,
+    max_tokens: MUSE_CFG.maxTokens,
+    reasoning: { effort: MUSE_CFG.reasoningEffort },
+    messages: [
+      { role: "system", content: MUSE_SYSTEM_PROMPT },
+      { role: "user", content: JSON.stringify({ decision, ownerContext: ownerContext() }, null, 2) },
+    ],
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "decision",
+        strict: true,
+        schema: {
+          type: "object",
+          properties: { choice: { type: "string", enum: decision.options.map((o) => o.id) }, reason: { type: "string" } },
+          required: ["choice", "reason"],
+          additionalProperties: false,
+        },
+      },
     },
-    { signal, timeout: MUSE_CFG.timeoutMs },
-  );
-  if (response.stop_reason === "refusal") return { refusal: true };
-  const out = response.parsed_output as { choice?: unknown; reason?: unknown } | null;
-  return { choice: out?.choice, reason: out?.reason, model: response.model };
-};
+  };
+}
 
-/** Ask Muse. Never throws: every failure becomes { source: "owner_decides" }. */
-export async function museDecide(input: unknown, call: ModelCall = claudeCall, opts: { requireKey?: boolean; timeoutMs?: number } = {}): Promise<MuseResult> {
+/** Real call: OpenRouter chat completions (OpenAI-compatible), plain fetch. `fetchImpl` is injectable for tests. */
+export const openrouterCall =
+  (fetchImpl: typeof fetch = fetch): ModelCall =>
+  async (decision, signal) => {
+    const res = await fetchImpl(MUSE_CFG.endpoint, {
+      method: "POST",
+      signal,
+      headers: { Authorization: `Bearer ${apiKey()}`, "Content-Type": "application/json", "X-Title": "Monaid" },
+      body: JSON.stringify(openrouterBody(decision)),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new AgentHttpError(res.status, `HTTP ${res.status}: ${text.replace(/\s+/g, " ").slice(0, 160)}`);
+    let json: { model?: string; choices?: { finish_reason?: string; message?: { content?: unknown; refusal?: unknown } }[]; error?: { message?: string } };
+    try {
+      json = JSON.parse(text);
+    } catch {
+      throw new AgentOutputError("response is not JSON");
+    }
+    if (json.error) throw new AgentHttpError(res.status, `provider error: ${String(json.error.message ?? "").slice(0, 160)}`);
+    const msg = json.choices?.[0]?.message;
+    if (msg?.refusal || json.choices?.[0]?.finish_reason === "content_filter") return { refusal: true };
+    const content = typeof msg?.content === "string" ? msg.content.trim().replace(/^```(?:json)?\s*|\s*```$/g, "") : "";
+    let out: { choice?: unknown; reason?: unknown };
+    try {
+      out = JSON.parse(content);
+    } catch {
+      throw new AgentOutputError(`answer is not JSON: ${content.slice(0, 60)}`);
+    }
+    return { choice: out.choice, reason: out.reason, model: json.model ?? MUSE_CFG.model };
+  };
+
+/** Ask the decision agent. Never throws on model problems: every failure becomes { source: "owner_decides" }. */
+export async function museDecide(input: unknown, call: ModelCall = openrouterCall(), opts: { requireKey?: boolean; timeoutMs?: number } = {}): Promise<MuseResult> {
   const t0 = Date.now();
   const decision = validateDecision(input); // bad input is the caller's error, not a fallback
   const timeoutMs = opts.timeoutMs ?? MUSE_CFG.timeoutMs;
+  const by = agentLabel();
   const done = (r: MuseResult) => {
-    bus.emit("feed", { type: "claude_decision", question: decision.question, ...r });
+    bus.emit("feed", { type: "agent_decision", question: decision.question, ...r });
     return r;
   };
   const fallback = (fallback: Extract<MuseResult, { source: "owner_decides" }>["fallback"], detail: string) =>
-    done({ source: "owner_decides", fallback, detail, ms: Date.now() - t0 });
+    done({ source: "owner_decides", by, fallback, detail, ms: Date.now() - t0 });
 
-  if ((opts.requireKey ?? call === claudeCall) && !(readEnv().ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY)) {
-    return fallback("no_api_key", "ANTHROPIC_API_KEY not set in agents/.env");
-  }
+  if ((opts.requireKey ?? true) && !apiKey()) return fallback("no_api_key", "OPENROUTER_API_KEY not set in agents/.env");
 
   const ac = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -123,14 +178,11 @@ export async function museDecide(input: unknown, call: ModelCall = claudeCall, o
     if (!decision.options.some((o) => o.id === choice)) return fallback("invalid_output", `choice "${String(r.choice).slice(0, 40)}" is not one of the options`);
     if (!reason) return fallback("invalid_output", "empty reason");
     if (reason.length > 200) reason = reason.slice(0, 197) + "…";
-    return done({ source: "claude", choice, reason, ms: Date.now() - t0, model: r.model });
+    return done({ source: "agent", by, choice, reason, ms: Date.now() - t0, model: r.model });
   } catch (e) {
     if (ac.signal.aborted) return fallback("timeout", `no answer within ${timeoutMs} ms`);
-    if (e instanceof Anthropic.APIError || e instanceof Anthropic.APIConnectionError) {
-      return fallback("api_error", `${(e as InstanceType<typeof Anthropic.APIError>).status ?? ""} ${e.message}`.trim().split("\n")[0].slice(0, 200));
-    }
-    // Anything else (e.g. the SDK's schema parse rejecting the model's JSON) means the output was unusable.
-    return fallback("invalid_output", String((e as Error)?.message ?? e).split("\n")[0].slice(0, 200));
+    if (e instanceof AgentOutputError) return fallback("invalid_output", e.message);
+    return fallback("api_error", String((e as Error)?.message ?? e).split("\n")[0].slice(0, 200));
   } finally {
     clearTimeout(timer);
   }
