@@ -14,13 +14,14 @@ Hardhat 2 + viem, configured for **Monad Testnet** (chain ID `10143`, EVM target
 ```sh
 cd contracts
 npm install
-cp .env.example .env
-npm run wallet:new        # prints a fresh address + private key
+npm run wallet:new            # creates DEPLOYER + AGENT_1, keys go straight into .env
+npm run wallet:new -- AGENT_2 # add another named wallet
 ```
 
-1. Put the private key in `.env` as `PRIVATE_KEY=0x...` (never commit `.env`).
-2. Claim testnet MON for the address at https://faucet.monad.xyz.
-3. `npm run balance` — confirms the key is loaded and shows the MON balance.
+`wallet:new` prints addresses only and never overwrites an existing key. `.env` is git-ignored — never commit it.
+
+1. Fund the printed addresses with testnet MON at https://faucet.monad.xyz.
+2. `npm run balance` — shows every wallet and its MON balance.
 
 ## Develop & deploy
 

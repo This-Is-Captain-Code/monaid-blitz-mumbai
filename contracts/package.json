@@ -4,7 +4,7 @@
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
-    "wallet:new": "hardhat run scripts/new-wallet.ts",
+    "wallet:new": "ts-node scripts/new-wallet.ts",
     "balance": "hardhat run scripts/balance.ts --network monadTestnet",
     "deploy:testnet": "hardhat ignition deploy ignition/modules/Greeter.ts --network monadTestnet",
     "verify:testnet": "hardhat verify --network monadTestnet"

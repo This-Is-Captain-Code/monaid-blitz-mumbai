@@ -1,16 +1,18 @@
-// Prints the deployer address and its MON balance on Monad testnet.
+// Prints every configured wallet (from .env) and its MON balance on Monad testnet.
 import hre from "hardhat";
 import { formatEther } from "viem";
 
+const NAMES = ["DEPLOYER", "AGENT_1"];
+
 async function main() {
-  const [wallet] = await hre.viem.getWalletClients();
-  if (!wallet) throw new Error("No PRIVATE_KEY set in contracts/.env");
+  const wallets = await hre.viem.getWalletClients();
+  if (wallets.length === 0) throw new Error("No keys in contracts/.env — run npm run wallet:new");
   const client = await hre.viem.getPublicClient();
-  const balance = await client.getBalance({ address: wallet.account.address });
   console.log(`Network: ${hre.network.name} (chainId ${await client.getChainId()})`);
-  console.log(`Address: ${wallet.account.address}`);
-  console.log(`Balance: ${formatEther(balance)} MON`);
-  if (balance === 0n) console.log("Empty — claim testnet MON at https://faucet.monad.xyz");
+  for (const [i, w] of wallets.entries()) {
+    const bal = await client.getBalance({ address: w.account.address });
+    console.log(`${(NAMES[i] ?? `#${i}`).padEnd(10)} ${w.account.address}  ${formatEther(bal)} MON`);
+  }
 }
 
 main().catch((e) => {
