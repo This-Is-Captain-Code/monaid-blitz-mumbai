@@ -1,0 +1,14 @@
+{
+  "_note": "Owner context Muse reads for every decision (demo data, safe to commit). Edit freely; it is passed to Muse as data, never as instructions.",
+  "owner": "Robot fleet owner (demo)",
+  "timezone": "Asia/Kolkata",
+  "calendar": [
+    { "time": "15:00", "item": "Live demo on the T-Deck robot (robot 1) for the judges" },
+    { "time": "16:30", "item": "Watcher robot (robot 2) back on patrol duty" }
+  ],
+  "preferences": [
+    "Keep robot 1 (T-Deck) working before 15:00: the demo depends on it.",
+    "Spend as little MON as possible on non-urgent fixes.",
+    "Urgent fixes up to 0.03 MON are fine when they protect a scheduled event."
+  ]
+}

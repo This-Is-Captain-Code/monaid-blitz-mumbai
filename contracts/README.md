@@ -31,6 +31,6 @@ npm run deploy:testnet                     # deploys ignition/modules/MonaidCore
 npm run verify:testnet -- <address>         # Sourcify/MonadVision; Monadscan needs ETHERSCAN_API_KEY
 ```
 
-`MonaidCore.sol` (v0): `registerRobot`, `fund`, `pay`, `balanceOf`, `pause`/`unpause`. Add an Ignition module per deployment.
+`MonaidCore.sol` (v1.1 — `cancel`/`expire` work while paused): `registerRobot`, `fund`, `pay` (capped), `postJob`, `claim`, `settle`, `expire`, `cancel`, `setMaxPayout`, `pause`/`unpause`, `balanceOf`, `escrowOf`, `getJob`, `claimDeadline`. Ignition module id `MonaidCoreV1_1Module` (v1 `MonaidCoreV1Module`, v0 `MonaidCoreModule`).
 
 Notes: Hardhat 3 needs Node ≥ 22.13, so this uses Hardhat 2. `verify` sometimes prints an error even when verification succeeded — check the explorer.

@@ -1,0 +1,8 @@
+{
+  "_note": "Worker registry: short worker ID -> wallet address. Devices/bridge send only the ID (T-Deck types it, e.g. RAJ-7; matched case-insensitively). Unknown IDs are rejected and the device shows UNKNOWN WORKER. Demo workers RAJ-7, DEMO-1, DEMO-2 all pay the demo-1 wallet for now. Add judges' IDs here on the day, then restart the API.",
+  "workers": {
+    "demo-1": "0x3D8117EE881F4e5Bc158A3428bdede3FcFcC4DD8",
+    "demo-2": "0x3D8117EE881F4e5Bc158A3428bdede3FcFcC4DD8",
+    "raj-7": "0x3D8117EE881F4e5Bc158A3428bdede3FcFcC4DD8"
+  }
+}

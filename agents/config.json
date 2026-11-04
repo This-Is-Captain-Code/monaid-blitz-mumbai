@@ -4,16 +4,89 @@
     "chainId": 10143,
     "rpcUrl": "https://testnet-rpc.monad.xyz",
     "txExplorer": "https://testnet.monadscan.com/tx/",
-    "addressExplorer": "https://testnet.monadvision.com/address/"
+    "addressExplorer": "https://testnet.monadvision.com/address/",
+    "receiptPollingMs": 300,
+    "backupRpcUrl": "https://rpc.ankr.com/monad_testnet"
   },
   "robots": [
-    { "id": "1", "agent": "AGENT_1" },
-    { "id": "2", "agent": "AGENT_2" }
+    {
+      "id": "tdeck-01",
+      "agent": "AGENT_1",
+      "bridgeId": 1,
+      "addressId": "1",
+      "label": "T-Deck"
+    },
+    {
+      "id": "watcher-01",
+      "agent": "AGENT_2",
+      "bridgeId": 2,
+      "addressId": "2",
+      "label": "Watcher"
+    }
   ],
   "funding": {
     "deployerFloorMon": "12",
     "agentGasFloorMon": "1",
     "agentTopupTargetMon": "3",
     "agentTopupDailyCapMon": "10"
-  }
+  },
+  "tx": {
+    "separateSimulate": false,
+    "feeRefreshMs": 3000,
+    "fixedGasPreflight": true,
+    "fixedGas": {
+      "postJob": 174700,
+      "claim": 55900,
+      "settle": 114100
+    },
+    "_fixedGasNote": "measured on v1 2026-11-04 via eth_estimateGas: postJob max 166377 (first job), claim 53165, settle 108634 (fresh worker); +5%"
+  },
+  "api": {
+    "host": "127.0.0.1",
+    "port": 4000,
+    "_note": "Bind to the laptop's hotspot IP on the day (or MONAID_API_HOST / MONAID_API_PORT). Token: MONAID_API_TOKEN in agents/.env (npm run api:token)."
+  },
+  "jobs": {
+    "payouts": {
+      "normal": "0.01",
+      "urgent": "0.03"
+    },
+    "claimWindowSec": 60,
+    "troubleKinds": [
+      "crash",
+      "down"
+    ],
+    "claimKinds": [
+      "claim",
+      "click"
+    ],
+    "clickWorker": "demo-1",
+    "proofKinds": {
+      "down": [
+        "heartbeat",
+        "up",
+        "power_on",
+        "power"
+      ],
+      "crash": [
+        "recover",
+        "power_on",
+        "power"
+      ]
+    },
+    "expiryCheckMs": 2000,
+    "_note": "Down module. crash|down → 0.01 MON job (data.level urgent → 0.03, needs owner approval). claim{text|worker} or click (→ clickWorker) → claim. Proof after the claim: for a 'down' job (device went offline) the first heartbeat/up/power_on/power{on:true}; for a 'crash' job (simulated, device stays online) recover/power_on/power{on:true}. No proof within claimWindowSec → expired."
+  },
+  "workersFile": "workers.json",
+  "muse": {
+    "provider": "openrouter",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "model": "anthropic/claude-haiku-5.5",
+    "reasoningEffort": "low",
+    "timeoutMs": 8000,
+    "maxTokens": 2000,
+    "ownerContextFile": "owner-context.json",
+    "_note": "Decision agent via OpenRouter (OpenAI-compatible chat completions). Key: OPENROUTER_API_KEY in agents/.env. Model id from https://openrouter.ai/api/v1/models (anthropic/claude-haiku-5.5: fastest current Claude there, supports response_format). Shown as 'Claude' for Claude models, else 'AI agent'. >8 s, invalid, refused, HTTP error or no key → owner decides."
+  },
+  "_robotsNote": "Robot id = the device's MQTT username. bridgeId = the number the bridge sends as robotId. addressId = seed of the on-chain robot address (kept from the earlier ids '1'/'2', so the registered robots and their balances stay the same)."
 }

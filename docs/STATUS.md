@@ -1,96 +1,225 @@
 # Monaid — Status
 
-_Last updated: 2026-11-04, end of P2; next P3._
+_Last updated: 2026-11-04, final run (Down module, bridge-matched, OpenRouter decision agent)._
 
 **My scope:** `contracts/`, `agents/`, `shared/`, `docs/` only — wallets, funding, transactions, robot agents,
 Muse logic, guardrails, and an API for teammates. Firmware, broker, MQTT bridge, screens, portal UI and
 WhatsApp transport belong to teammates.
 
+## How to run the demo
+
+1. Laptop on the hotspot; teammate's bridge on the same laptop with `AGENTS_API=http://localhost:4000` and `MONAID_TOKEN` = our `MONAID_API_TOKEN` (agents/.env).
+2. `cd agents && npm run api` — Agents API on port 4000 + expiry watcher (keep this terminal open).
+3. `npm run reset:demo` — closes leftover jobs, robots to 0.5 MON, agents above floor, kill switch off, prints balances + explorer links.
+4. `npm run preflight` — must end with "ready to demo" (RPC, floors, robots, contract = shared/, API on 4000, token, OpenRouter key).
+5. Open the explorer on AGENT_1 / AGENT_2 (links printed by reset:demo) and the bridge with `FEED_ENABLED=1`.
+6. Happy path: long-press the Watcher (crash) → both screens JOB OPEN (0.01 MON escrowed on-chain).
+7. Type `RAJ-7` + Enter on the T-Deck → CLAIMED; release the Watcher (recover) → PAID on both screens (~1 s).
+8. Fail path: crash again → click the Watcher knob (claim as DEMO-1) → don't recover → after 60 s BLOCKED (escrow back).
+9. Guardrail beats: `npm run demo:guardrails`; kill switch: `POST /admin/kill`; decision agent: `npm run check:agent-decision`.
+10. No hardware? `npm run mock:bridge` plays the exact bridge format end to end (~85 s, prints PASS/FAIL).
+
+### Final-run results
+
+- Bridge match (their `server/bridge` on `step/firmware-net`): numeric robotId 1/2 → `tdeck-01`/`watcher-01` (same on-chain robots via `addressId`), port 4000,
+  `x-monaid-token`, all 9 kinds → 200, duplicate-dropping instead of strict seq, claim by typed id (`RAJ-7`/`DEMO-1`/`DEMO-2`, all pay demo-1) on the oldest open
+  job, unknown worker → `UNKNOWN WORKER` on that device, screen lines `{robotId, screen:{state|say|cmd:job}}` to both devices. mock:bridge 19/19.
+- Rehearsals (reset:demo → preflight → happy → fail), 3/3 PASS: recover→PAID on both screens **1146 / 935 / 914 ms**; fail path expired 63–64 s after the claim.
+- Decision agent via OpenRouter `anthropic/claude-haiku-5.5` (shown as "Claude"): 3 real decisions **1771 / 2247 / 1664 ms** (avg ≈ 1.9 s < 3 s, model kept);
+  reason e.g. "Robot 1 powers the 15:00 judge demo, so it gets help first; both payouts are equal at 0.01 MON." Via API `/agent/decide`: 1711 ms.
+- RPC: the venue network drops requests to testnet-rpc.monad.xyz; all clients now fall back to `https://rpc.ankr.com/monad_testnet`.
+- Not done: hotspot settle timing (pending, see below); job card needs a `cmd:"job"` branch in the teammate's bridge (state/say lines already work).
+- Blocked by the auto-mode classifier (correctly): raising `maxPayout` on the live contract to drain robots — solved instead by keeping robot addresses (`addressId`).
+
 ## Plan
 
 | Step | Title | Status |
 |---|---|---|
-| P0 | Stop and re-scope | done (new CLAUDE.md committed) |
-| P1 | Finish the payment contract (MonaidCore v0) | done and merged (PR #1); leftovers done on `step2/wallets` |
-| P2 | Wallet manager and funding | **done** — branch `step2/wallets` (not merged) |
-| P3 | Transaction sender | **next** |
-| P4 | Jobs in the contract (MonaidCore v1) | — |
-| P5 | Robot agents and off-chain guardrails | — |
-| P6 | Agents API for teammates | — |
-| P7 | Muse (decision logic only) | — |
-| P8 | Module contract (Charger / Lost / Down, team picks) | — |
-| P9 | Demo hardening | — |
+| P0 | Stop and re-scope | done |
+| P1 | Finish the payment contract (MonaidCore v0) | done and merged (PR #1, #2) |
+| P2 | Wallet manager and funding | done and merged (PR #2) |
+| P3 | Transaction sender | done and merged (PR #3) |
+| P4 | Jobs in the contract (MonaidCore v1.1) + sendTx latency pass | done and merged (PR #4) |
+| P5 | Robot agents and off-chain guardrails | done and merged (PR #5) |
+| P6 | Agents API for teammates | done and merged (PR #6) |
+| P7 | Decision agent (was "Muse"; now OpenRouter, shown as Claude) | done and merged (PR #7) + OpenRouter switch in final run |
+| P8 | Module: **Down**, on MonaidCore v1.1 (no new contract) | done — crash/down → 0.01 MON job, claim, recover/first heartbeat → settle, 60 s → expire |
+| P9 | Demo hardening | done — reset:demo, preflight, mock:bridge, 3 rehearsals |
+
+### Pending
+
+- **Hotspot timing of a full settle (5 before / 5 after) — skipped for now, pending.** Run on the phone hotspot:
+  `MONAID_TX_LEGACY=1 npm run time:settle` (before) and `npm run time:settle` (after) in `agents/`. ~0.37 MON of AGENT_1 gas.
+  Indicative only (venue Wi-Fi, current path before fixed gas, 3 runs): settle 975 / 1417 / 1468 ms.
+
+### Demo amounts
+
+- **Demo payouts are 0.01 MON normally** (`crash` → `data.level` "normal", the default) **and 0.03 MON for the
+  owner-approval beat** (`data.level: "urgent"`, above the 0.02 MON approval threshold → waits for `POST /owner/decide`).
+  Tiers live in `agents/config.json` → `jobs.payouts`; events can only pick a tier, never an amount.
+- Policy (`agents/policy.json`, defaults for every robot): maxPayoutPerJob **0.05**, maxSpendPerDay **0.5**,
+  maxOpenJobs 2, ownerApprovalAbove **0.02** MON. On-chain cap (MonaidCore.maxPayout) 0.1 MON.
+- Claim window 60 s (`jobs.claimWindowSec`); the API's expiry watcher expires claimed jobs after it (fail path).
+
+## Decision agent (P7, originally "Muse"; superseded by the OpenRouter switch above)
+
+Muse = the owner's decision agent (`agents/src/muse.ts`). It **decides, never sends transactions**: picks exactly one option id
+with a one-line reason via the Claude API (`claude-opus-5-5`, effort `low`, structured JSON output, server-side refusal
+fallback `fallbacks: "default"`). Invalid/empty output, refusal, > 8 s, API error or **no API key → owner decides**.
+Its pick is applied through `/owner/decide`, so every guardrail, the kill switch and on-chain caps still apply.
+Owner context: `agents/owner-context.json` (demo calendar: T-Deck demo 15:00, Watcher patrol 16:30). Config: `agents/config.json` → `muse`.
+
+- `POST /muse/decide` — approval mode `{approvalId}` (approve/reject, applied) or advice mode `{question, options}` (answer only).
+  Feed event `muse_decision` carries Muse's reason. WhatsApp transport contract: `docs/agents-api.md`.
+- **Pending: `ANTHROPIC_API_KEY` is not set**, so every live call so far fell back (`no_api_key`) — that path is proven
+  end to end (`mock:bridge -- happy --muse`: Muse fell back in 1 ms, owner approved, job 10 settled 0.03 MON → demo-1).
+  Add the key to `agents/.env`, then `npm run check:muse` for a real decision.
+- Finding: the SDK moves `enum` into the schema description (structured outputs don't enforce it), so the JSON shape is
+  guaranteed but option membership is enforced by our validator (`invalid_output` fallback).
+- Tests: 18 agents unit tests (8 for Muse: valid pick, invented option, empty reason, refusal, timeout, API error, parse failure, no key, bad input).
+
+## Agents API (P6)
+
+Spec for teammates: **`docs/agents-api.md`** (curl examples + real responses). Types: `shared/api-types.ts`.
+Endpoints: `POST /events`, `POST /jobs/:id/claim`, `POST /owner/decide`, `POST /admin/kill`, `POST /admin/reset-seq`,
+`GET /robots`, `GET /jobs`, `GET /approvals`, `GET /workers`, `GET /feed` (SSE), `GET /health`.
+Auth: `X-Monaid-Token` = `MONAID_API_TOKEN` in `agents/.env` (created by `npm run api:token`, never printed — share privately).
+Bind: `agents/config.json` → `api` (127.0.0.1:8787 now; set the hotspot IP or `MONAID_API_HOST=0.0.0.0` on the day).
+
+- **Worker registry** `agents/workers.json`: `demo-1` → `0x3D8117EE881F4e5Bc158A3428bdede3FcFcC4DD8` (WORKER_DEMO_1),
+  `demo-2` → `0xAECcb5bdc054fB555a0B1AE412aB50158dE9417E` (WORKER_DEMO_2). Keys for both are in `agents/.env` so demo
+  payouts can be recovered. **Add judges' IDs → addresses on the day, then restart the API.**
+- **Robot ids are config-only** (`agents/config.json` → `robots`); robots not in `policy.json` use the defaults.
+  If ids change to the MQTT usernames: edit config.json, run `npm run register:robots` + `fund:robot` (new robot addresses).
+- `npm run mock:bridge` (API running): rejections (401, 404 robot, 409 replay, 400 kind, 404 worker), happy path,
+  fail path (expiry watcher), then `reset-seq`. Run with `--approval` for the 0.03 approval beat.
+  Live runs: job 7 (urgent, approved, settled 0.03 → demo-1), job 8 (claimed, expired), job 9 (normal, settled 0.01 → demo-1).
 
 ## Broker — handed to teammate
 
-The broker belongs to a teammate. The local `broker/` folder (Mosquitto config, ACL, credentials/run scripts,
-ACL test — never run, never committed) is kept as-is and excluded locally via `.git/info/exclude`.
-Mosquitto 2.1.2 is installed on the laptop (winget); its Windows service runs on `localhost:1883`. Not touched further.
+Local `broker/` kept as-is, excluded via `.git/info/exclude`. Mosquitto 2.1.2 installed on the laptop; service untouched.
 
 ## Deployed (Monad testnet, chain 10143)
 
 | Contract | Address | Notes |
 |---|---|---|
-| MonaidCore v0 | `0xDD22ee7923195EbBcC247d40553BCB138A6D5BBf` | [verified on MonadVision](https://testnet.monadvision.com/contracts/full_match/10143/0xDD22ee7923195EbBcC247d40553BCB138A6D5BBf/) · deploy tx [0x51f331c8…](https://testnet.monadscan.com/tx/0x51f331c895125db91a67994d4e23459c9655585ca64cd6d05906f7a645a771b0) · block 76858867 |
+| **MonaidCore v1.1** (current) | `0x3DbE227ad91Cc3bfa14468196F413173dF893867` | [verified on MonadVision](https://testnet.monadvision.com/contracts/full_match/10143/0x3DbE227ad91Cc3bfa14468196F413173dF893867/) · deploy tx [0xcc5c76c5…](https://testnet.monadscan.com/tx/0xcc5c76c55a923615285d22bad1a4f8da43f356cfcb1ca02f0ab2a22a1572f1b6) · block 76879068 · maxPayout 0.1 MON |
+| MonaidCore v1 (retired) | `0xb95e667d8DA354a0517553926D39Af148543Ce98` | balances recovered; its maxPayout was raised to 0.5 MON for the recovery |
+| MonaidCore v0 (retired) | `0xDD22ee7923195EbBcC247d40553BCB138A6D5BBf` | balances recovered |
 
-Machine-readable: `shared/addresses.json` (contract, wallets, robots) and `shared/abi/MonaidCore.json`.
+Machine-readable: `shared/addresses.json` (current + `history`) and `shared/abi/MonaidCore.json`.
+
+### MonaidCore v1.1 rules
+
+- `postJob(robot, payout, claimWindow)` — robot's agent only; `payout ≤ maxPayout`; payout escrowed from the robot's balance.
+- `claim(jobId, worker)` — robot's agent only (the bridge/portal reports claims to our API); claim valid for `claimWindow` seconds.
+- `settle(jobId)` — robot's agent only; pays the worker; reverts `JobNotClaimed` / `ClaimExpired` / `AlreadySettled`.
+- `expire(jobId)` — **anyone**, after the window; escrow back to the robot. **Works while paused.**
+- `cancel(jobId)` — robot's agent, unclaimed jobs only; escrow back. **Works while paused.**
+- `pay(robot, to, amount)` — direct agent payment, capped by `maxPayout`.
+- `pause()` blocks `fund`, `pay`, `postJob`, `claim`, `settle`. `setMaxPayout` owner only.
+- Errors: `NotOwner`, `NotRobotAgent`, `RobotNotRegistered`, `RobotAlreadyRegistered`, `ZeroAddress`, `ZeroAmount`, `ZeroWindow`,
+  `InsufficientBalance`, `PayoutTooHigh`, `Paused`, `TransferFailed`, `UseFund`, `JobNotFound`, `JobNotOpen`, `JobNotClaimed`,
+  `ClaimExpired`, `ClaimNotExpired`, `AlreadySettled`. 12 contract tests.
 
 ## Wallets
 
-All keys live in `agents/.env` (git-ignored); `contracts/` reads from it. `contracts/.env` no longer exists.
-Funding rules (`agents/config.json`): DEPLOYER hard floor **12 MON** (every DEPLOYER value send checks it first and
-refuses with what is still spendable); agent gas floor **1 MON**, top-up target **3 MON**, top-ups capped at
-**10 MON per UTC day** (ledger `agents/logs/topups.jsonl`).
+All keys in `agents/.env` (git-ignored); `contracts/` reads from it. Funding rules (`agents/config.json`): DEPLOYER hard floor
+**12 MON**; agent gas floor **1 MON**, top-up target **3 MON**, top-ups capped at **10 MON per UTC day**.
 
-| Name | Address | Role | Balance (end of P2) | Spendable (balance − floor) |
+| Name | Address | Role | Balance (end of P7) | Spendable |
 |---|---|---|---|---|
-| DEPLOYER | `0x639B5bE0679EC82C7224F31d04bb3dD093222d5D` | owner / funder | 25.8926 MON | 13.8926 MON |
-| AGENT_1 | `0x31443AB8d8F13E16b86bfcDB4b965320E560824A` | agent, robot 1 | 4.9847 MON | 3.9847 MON |
-| AGENT_2 | `0x16Cd0840ba8d68B526D5F5D9EB72626bB7A1CA45` | agent, robot 2 | 3.0000 MON | 2.0000 MON |
+| DEPLOYER | `0x639B5bE0679EC82C7224F31d04bb3dD093222d5D` | owner / funder | 25.5257 MON | 13.5257 MON |
+| AGENT_1 | `0x31443AB8d8F13E16b86bfcDB4b965320E560824A` | agent, robot 1 | 4.4218 MON | 3.4218 MON |
+| AGENT_2 | `0x16Cd0840ba8d68B526D5F5D9EB72626bB7A1CA45` | agent, robot 2 | 2.8614 MON | 1.8614 MON |
+| WORKER_DEMO_1 | `0x3D8117EE881F4e5Bc158A3428bdede3FcFcC4DD8` | demo worker `demo-1` | 0.07 MON | — |
+| WORKER_DEMO_2 | `0xAECcb5bdc054fB555a0B1AE412aB50158dE9417E` | demo worker `demo-2` | 0 MON | — |
 
-### Robots (registered in MonaidCore v0)
-
-| Robot | Robot address (derived from id, no key) | Agent | Balance in core |
+| Robot | Robot address (derived from id, no key) | Agent | Balance in v1.1 |
 |---|---|---|---|
-| 1 | `0xB46d4FeCEFd31C1531FA84Dd61228b9Ea5107077` | AGENT_1 | 0.5 MON |
-| 2 | `0xE1f9bf1554a484d8993bF19e4cF02B79e4ccF254` | AGENT_2 | 0.5 MON |
+| 1 | `0xB46d4FeCEFd31C1531FA84Dd61228b9Ea5107077` | AGENT_1 | 0.43 MON |
+| 2 | `0xE1f9bf1554a484d8993bF19e4cF02B79e4ccF254` | AGENT_2 | 0.499 MON |
 
-Old v0 demo-only addresses (no keys): robot `0x478962782092A83697F4d5BC9c44bc1e5Ba572a6` (AGENT_1, 0.005 MON in core),
-technician `0x9A5E9183193DA5978efc86e537604f1f787456D7`.
+## sendTx (`agents/src/tx.ts`)
 
-### P2 transactions
+DEPLOYER floor check → gas (fixed per action, or estimate +15%; estimation doubles as the revert pre-check) →
+sign with local nonce + cached fees → send → poll receipt every 300 ms. Per-wallet serial queue; network-error
+retries only; custom errors decoded; one audit line per attempt in `agents/logs/audit.jsonl`.
 
-| What | Tx | Fee MON |
-|---|---|---|
-| registerRobot 1 → AGENT_1 | [0x6d9a9cb1…](https://testnet.monadscan.com/tx/0x6d9a9cb11657f32d1387483dde048642cd6eb68cedd0423aa29b733fef9bc26f) | 0.0062 |
-| registerRobot 2 → AGENT_2 | [0xa884ab5e…](https://testnet.monadscan.com/tx/0xa884ab5e99465779a905467042b8afe27b407df01c735de556f5f5383edfd7a9) | 0.0062 |
-| top up AGENT_2, 3 MON | [0x6780b760…](https://testnet.monadscan.com/tx/0x6780b7601e1a7a9e7a282ce9fe72054d92e22565091131e64159cd0ab6fede12) | 0.0025 |
-| fund robot 1, 0.5 MON | [0x20b6784e…](https://testnet.monadscan.com/tx/0x20b6784e2adf9ae8913b542f716548f1b8a3f980ec0019aa7b2583b657250af1) | 0.0081 |
-| fund robot 2, 0.5 MON | [0xc1debb4b…](https://testnet.monadscan.com/tx/0xc1debb4bd92c56c0b8664014cf218db95bdfff61deb0fbdda00ad12ea68e960d) | 0.0081 |
+- **Fee cache:** refreshed in the background every 3 s (`tx.feeRefreshMs`).
+- **Fixed gas** (`tx.fixedGas`, measured via `eth_estimateGas` on v1, +5%): postJob 174,700 (max seen 166,377 on a
+  contract's first job), claim 55,900 (53,165), settle 114,100 (108,634, paying a fresh worker address).
+  Fixed-gas actions still simulate first, **with the fixed limit**, so bad calls are refused locally (your choice).
+- **Out-of-gas fallback:** a too-small fixed limit is logged (`result: "out-of-gas"`) and retried once with estimation.
+  Proven live (`npm run check:oog`): caught at preflight with nothing sent; and, with preflight off, failed on-chain
+  ([0xa77108b0…](https://testnet.monadscan.com/tx/0xa77108b04f9b7639213417382be23369ab95c960889191d229145f13234ee058),
+  0.00612 MON) then succeeded on the retry.
+- `MONAID_TX_LEGACY=1` reproduces the pre-latency-pass path for timing comparisons.
+
+### Earlier timings (venue Wi-Fi)
+
+| Receipt wait, 5 sequential `pay()` (send → receipt) | min | avg | max |
+|---|---|---|---|
+| viem default (`waitForTransactionReceipt`, 4000 ms poll) | 538 ms | 693 ms | 954 ms |
+| viem client `pollingInterval: 300` | 764 ms | 1159 ms | 1391 ms |
+| **direct receipt poll every 300 ms (kept)** | **188 ms** | **556 ms** | **775 ms** |
+
+Nonce proof (`npm run proof:sendtx`): 5 concurrent pays from one agent → consecutive nonces, chain order = nonce order.
+
+## Robot agents and guardrails (P5)
+
+`RobotAgent` per robot (`agents/src/robot-agent.ts`): postJob, acceptClaim, settleOnProof, expire, cancel — via sendTx,
+after the off-chain checks: kill switch → policy (`agents/policy.json`: maxPayoutPerJob 0.05, maxSpendPerDay 0.1,
+maxOpenJobs 2, ownerApprovalAbove 0.02 MON, allowedActions) → owner-approval queue above the threshold.
+Kill switch (`MONAID_KILL=1` / `engageKillSwitch()`) is enforced inside sendTx, so it stops every send.
+Full table and demo instructions: `docs/guardrails.md`.
+
+- `npm run demo:guardrails` — 9/9 beats: policy cap, owner approval, allowed job, daily cap, max open jobs,
+  action not allowed, kill switch (agent + DEPLOYER), on-chain `PayoutTooHigh` revert
+  ([0xc4b3ff22…](https://testnet.monadscan.com/tx/0xc4b3ff224fec1cb6b9391af680c556da41c16e08ae7334b2e201a2eabd5d98d2)).
+- `npm run check:agent` (robot 2) — approval → approve → posted → cancel; happy path job 5
+  ([settle](https://testnet.monadscan.com/tx/0xb14e7e2504a93e3e39f2df75abb640eee972af5a378cca6877c423e89d2760d0));
+  fail path job 6 ([expire](https://testnet.monadscan.com/tx/0x1f80103523e1ae559605fdb719727c447555a48b9924fc651844ef9699c3d52d)).
+  A real network error mid-send was retried with the same signed tx and succeeded.
+- Agents unit tests: 10 (sendTx error handling + policy rules).
 
 ## Findings
 
-- **Reserve balance — TESTED: gas-only wallets CAN sit below 10 MON.** AGENT_1 at 4.9872 MON sent a 0-value
-  self-tx ([0x49cfba7a…](https://testnet.monadscan.com/tx/0x49cfba7a8c66bd4a150f5de63583351cf45056453f046771a0b1e9da9fe0a580)):
-  success, gas limit 24,150 (21,000 + 15%) at 103 gwei = 0.0024875 MON; balance 4.9872 → 4.9847 MON.
-  Its earlier `pay` call at 5 MON also succeeded. The reserve rule only restricts **value** sent out of a wallet.
-  **Rule for agents:** agent wallets only pay gas, so they may sit below 10 MON; gas floor 1 MON.
-  Wallets that send value (DEPLOYER via `fund`/top-ups) must stay ≥ 12 MON.
-- **Gas limit = gas charged.** Monad receipts report `gasUsed` equal to the limit. Scripts estimate +15%.
-  Typical fees at ~102–115 gwei: deploy ≈ 0.052 MON, `registerRobot` ≈ 0.006, `fund` ≈ 0.008, `pay` ≈ 0.013,
-  plain transfer ≈ 0.0025.
-- Ignition deploys use the raw estimate as the limit (no margin); fine so far.
+- **Reserve balance — gas-only wallets CAN sit below 10 MON** (AGENT_1 self-tx at 4.99 MON succeeded,
+  [0x49cfba7a…](https://testnet.monadscan.com/tx/0x49cfba7a8c66bd4a150f5de63583351cf45056453f046771a0b1e9da9fe0a580)).
+  Only value sends are restricted. Agent gas floor 1 MON; DEPLOYER ≥ 12 MON.
+- **Gas limit = gas charged**, and Monad receipts report `gasUsed` = the limit, so real usage must come from `eth_estimateGas`.
+- Fees at ~102 gwei: deploy v1.1 ≈ 0.137 MON, `registerRobot` ≈ 0.0062, `fund` ≈ 0.0081, `pay` ≈ 0.0084, transfer ≈ 0.0025.
+
+## P4 transactions
+
+| What | Tx |
+|---|---|
+| v0 → DEPLOYER recovery (robot 1, 2, P1 demo robot) | [0xccaea64a…](https://testnet.monadscan.com/tx/0xccaea64a32b5b0959f478e1c226dcd4e404b9b0cf767ec20e75fb06acebdc297) · [0xaa36c0f6…](https://testnet.monadscan.com/tx/0xaa36c0f662182c4a2189a0ecf073fc8237379929d30cb76d0e0d3be003b8f3e2) · [0x9d77737e…](https://testnet.monadscan.com/tx/0x9d77737e42e5db8684b0fd665a554dca91f66d248e2ed3441f534b52eae87025) |
+| Deploy v1 | [0x2535b067…](https://testnet.monadscan.com/tx/0x2535b067ade056ec0c196005359e04967b4699c1cf23917dddb52eb12808ea5c) |
+| v1 register 1, 2 · fund 1, 2 | [0x321a5500…](https://testnet.monadscan.com/tx/0x321a55003aa848f5016059e18c86edd9fad056a04342405e9aef44d250441084) · [0x7cf068ad…](https://testnet.monadscan.com/tx/0x7cf068ad6c2718f33477151fad7ac5776009c5e7c4fc4ebea38dbfb0da174ad2) · [0x86936906…](https://testnet.monadscan.com/tx/0x86936906fce322bfc233386440838dd3d4d6f0e5dc3451c5cb4746d650bf4dfb) · [0xa969a7ef…](https://testnet.monadscan.com/tx/0xa969a7ef4631be2ab91915ac4e3a951ec6e333d37932d1db2998e4416b4f21ce) |
+| Gas measurement: 3 × postJob/claim/settle on v1 | settles [run 1](https://testnet.monadscan.com/tx/0x7af374e2ab25d10b5925231bd76db10c9ea1d86637a0452a6cff41bc6f60e8d6) · [run 2](https://testnet.monadscan.com/tx/0x7b2df763c93310b7089e713d792cc6cd305a7df2d008508514ecc5273d0fb276) · [run 3](https://testnet.monadscan.com/tx/0xdbdcdf96ba392a50c9a55ac3c57b9a876f917a233667e8c9658a08f746be1ea2) |
+| v1 → DEPLOYER recovery (setMaxPayout 0.5, robot 1, robot 2) | [0x0ae231f6…](https://testnet.monadscan.com/tx/0x0ae231f6556e747b1b17d1a31a8bfb1d11313f1d0e9cc2044be31e9316aa2aba) · [0x52006024…](https://testnet.monadscan.com/tx/0x52006024f822a051aea5efd297680d0f59d854a92d54b47514a41dc912226556) · [0xe433c7bb…](https://testnet.monadscan.com/tx/0xe433c7bbc9395f132490976e5c3c73e2feb735d1b750296ea9a5e9cee9512cb5) |
+| Deploy v1.1 | [0xcc5c76c5…](https://testnet.monadscan.com/tx/0xcc5c76c55a923615285d22bad1a4f8da43f356cfcb1ca02f0ab2a22a1572f1b6) |
+| v1.1 register 1, 2 · fund 1, 2 | [0xb06b1eb0…](https://testnet.monadscan.com/tx/0xb06b1eb0a09756c3f58859f50ce63039f697377517157dc3ae61cc86227027d2) · [0x716c8889…](https://testnet.monadscan.com/tx/0x716c8889eebca00d1b02d35a5c4c8c8d12e6aa73beb4f21dc4bea7ff8b67c01c) · [0x2e48f93d…](https://testnet.monadscan.com/tx/0x2e48f93d1866a1703f74de2ebffcd1a83e6b1c61695c14f2fba36ccd8ef6ecf7) · [0xa27ad4be…](https://testnet.monadscan.com/tx/0xa27ad4be52670b614e57c9c5af44846a2e482fd20a127ef33104fe1d14c06392) |
+| check:oog (postJob ×2 after fallback, 1 failed on-chain attempt, cancel ×2) | [0x0946a9c5…](https://testnet.monadscan.com/tx/0x0946a9c5a8650b094c3498c7336477ecb058bb6e3dc2be350301c41215d8e7e6) · [0xa77108b0…](https://testnet.monadscan.com/tx/0xa77108b04f9b7639213417382be23369ab95c960889191d229145f13234ee058) · [0xdaacb031…](https://testnet.monadscan.com/tx/0xdaacb0313b26a126b20112429080b63aa2404392383d1fa3aab950652348b860) |
 
 ## MON spent
 
 | Step | Spent |
 |---|---|
-| P1 | ≈ 0.079 MON gas + 0.01 MON sent into MonaidCore |
-| P1 leftovers | 0.0024875 MON (AGENT_1 self-tx) |
-| P2 | 0.0311 MON gas; moved 3 MON DEPLOYER → AGENT_2 and 1 MON into MonaidCore (robots 1, 2). You added 15 MON to DEPLOYER by hand. |
+| P1 | ≈ 0.079 MON gas + 0.01 MON into MonaidCore v0 |
+| P1 leftovers | 0.0025 MON |
+| P2 | 0.0311 MON gas; 3 MON DEPLOYER → AGENT_2, 1 MON into v0. You added 15 MON to DEPLOYER. |
+| P3 | 0.0564 MON gas |
+| P3 timing tweak | 0.1683 MON gas |
+| P7 | 0.0352 MON gas (AGENT_1, one `--muse` mock run); 0.03 MON paid from robot 1 to demo-1 (recoverable) |
+| P6 | 0.1008 MON gas (AGENT_1 0.0703, AGENT_2 0.0305); 0.04 MON paid from robot 1 to demo-1 (recoverable) |
+| P5 | 0.1347 MON gas (AGENT_1 0.0435 guardrails demo, AGENT_2 0.0912 check:agent); 0.001 MON paid from robot 2 to a test worker |
+| P4 | ≈ 0.53 MON gas in total (two deploys ≈ 0.275, recoveries ≈ 0.046, registers/funds ≈ 0.041, gas measurement 0.111, check:oog ≈ 0.059). 1.985 MON recovered from v0/v1; 1 MON now in v1.1. |
 
 ## Open items
 
-- MonaidCore v0 has no way to change a robot's agent after registration.
+- Hotspot settle timing (see Pending).
+- Robot ids may change to match teammates' MQTT usernames (`agents/config.json` → `robots`); re-register if they do.
 - Monadscan verification skipped (no `ETHERSCAN_API_KEY`); MonadVision is the verify target.
-- P2 funding scripts send directly (estimate +15%); P3 switches them to the shared `sendTx` queue + audit log.
