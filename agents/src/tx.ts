@@ -24,6 +24,16 @@ import {
 import { AGENTS_DIR } from "./env.js";
 import { CORE_ABI, RECEIPT_POLL_MS, publicClient, txLink, walletClient } from "./chain.js";
 import { FloorError, assertDeployerCanSpend } from "./funding.js";
+import { getFees } from "./fees.js";
+import { config } from "./chain.js";
+
+/** sendTx tuning from agents/config.json → tx. */
+export const TX_CFG = {
+  separateSimulate: false,
+  fixedGasPreflight: true,
+  fixedGas: {} as Record<string, number>,
+  ...((config as { tx?: object }).tx ?? {}),
+} as { separateSimulate: boolean; fixedGasPreflight: boolean; fixedGas: Record<string, number>; feeRefreshMs?: number };
 
 const audited = new WeakSet<object>(); // errors already written to the audit log
 
@@ -54,6 +64,7 @@ export type TxResult = {
   fee: bigint;
   receipt: TransactionReceipt;
   confirmMs: number; // send accepted by RPC → receipt seen
+  totalMs: number; // sendTx started (after queue) → receipt seen
 };
 
 /** A revert decoded into a readable custom error. Never retried. */
@@ -185,6 +196,7 @@ export function sendTx(req: TxRequest): Promise<TxResult> {
 }
 
 async function sendNow(req: TxRequest): Promise<TxResult> {
+  const startedAt = performance.now();
   const client = walletClient(req.wallet);
   const from = client.account.address;
   const value = req.value ?? 0n;
@@ -217,29 +229,38 @@ async function sendNow(req: TxRequest): Promise<TxResult> {
     // 0. DEPLOYER hard floor, checked before anything else (re-checked with real gas after estimate)
     if (req.wallet === "DEPLOYER" && value > 0n) await assertDeployerCanSpend(value, 0n, `${req.action} (${formatEther(value)} MON)`);
 
-    // 1. simulate
-    try {
-      await withNetworkRetry("simulate", () => publicClient.call({ account: from, to: req.to, data, value }));
-    } catch (e) {
-      if (isNetworkError(e)) throw e;
-      fail("simulate", e);
-    }
+    const simulate = async () => {
+      try {
+        await withNetworkRetry("simulate", () => publicClient.call({ account: from, to: req.to, data, value }));
+      } catch (e) {
+        if (isNetworkError(e)) throw e;
+        fail("simulate", e);
+      }
+    };
 
-    // 2. estimate +15%
+    // 1. gas: a fixed per-action limit from config, or estimate +15% (estimation reverts with the same custom
+    //    error as a simulation, so it doubles as the pre-check; a separate simulate is optional).
     let gas: bigint;
-    try {
-      const est = await withNetworkRetry("estimateGas", () => publicClient.estimateGas({ account: from, to: req.to, data, value }));
-      gas = (est * (100n + GAS_MARGIN_PCT)) / 100n;
-    } catch (e) {
-      if (isNetworkError(e)) throw e;
-      return fail("estimate", e);
+    const fixed = TX_CFG.fixedGas[req.action];
+    if (fixed) {
+      gas = BigInt(fixed);
+      if (TX_CFG.fixedGasPreflight) await simulate();
+    } else {
+      if (TX_CFG.separateSimulate) await simulate();
+      try {
+        const est = await withNetworkRetry("estimateGas", () => publicClient.estimateGas({ account: from, to: req.to, data, value }));
+        gas = (est * (100n + GAS_MARGIN_PCT)) / 100n;
+      } catch (e) {
+        if (isNetworkError(e)) throw e;
+        return fail("estimate", e);
+      }
     }
 
     // DEPLOYER hard floor on every value send
     if (req.wallet === "DEPLOYER" && value > 0n) await assertDeployerCanSpend(value, gas, `${req.action} (${formatEther(value)} MON)`);
 
-    // 3. sign with our local nonce, 4. send (retry = resend the same raw tx), 5. wait
-    const fees = await withNetworkRetry("fees", () => publicClient.estimateFeesPerGas());
+    // 2. sign with our local nonce + cached fees, 3. send (retry = resend the same raw tx), 4. wait
+    const fees = await withNetworkRetry("fees", () => getFees());
     for (let nonceAttempt = 0; ; nonceAttempt++) {
       const nonce = await nextNonce(req.wallet, from, nonceAttempt > 0);
       const raw = await client.signTransaction({
@@ -283,8 +304,9 @@ async function sendNow(req: TxRequest): Promise<TxResult> {
         }
         return fail("onchain", decoded ?? new Error("execution reverted"), hash);
       }
-      audit({ ...base, result: "success", hash, link: txLink(hash), nonce, gas: gas.toString(), fee: formatEther(fee), block: receipt.blockNumber, confirmMs });
-      return { hash, link: txLink(hash), nonce, gas, fee, receipt, confirmMs };
+      const totalMs = Math.round(performance.now() - startedAt);
+      audit({ ...base, result: "success", hash, link: txLink(hash), nonce, gas: gas.toString(), gasUsed: receipt.gasUsed, fee: formatEther(fee), block: receipt.blockNumber, confirmMs, totalMs });
+      return { hash, link: txLink(hash), nonce, gas, fee, receipt, confirmMs, totalMs };
     }
   } catch (e) {
     if (e instanceof TxRevertedError) throw e;

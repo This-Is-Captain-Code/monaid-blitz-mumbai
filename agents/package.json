@@ -12,7 +12,8 @@
     "demo:pay": "tsx scripts/demo-pay.ts",
     "proof:sendtx": "tsx scripts/nonce-proof.ts",
     "test": "tsx --test test/tx.test.ts",
-    "time:pay": "tsx scripts/time-pay.ts"
+    "time:pay": "tsx scripts/time-pay.ts",
+    "check:refusals": "tsx scripts/check-refusals.ts"
   },
   "dependencies": {
     "dotenv": "^18.0.9",

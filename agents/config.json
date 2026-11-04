@@ -22,5 +22,11 @@
     "agentGasFloorMon": "1",
     "agentTopupTargetMon": "3",
     "agentTopupDailyCapMon": "10"
+  },
+  "tx": {
+    "separateSimulate": false,
+    "feeRefreshMs": 3000,
+    "fixedGasPreflight": true,
+    "fixedGas": {}
   }
 }
