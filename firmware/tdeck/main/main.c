@@ -102,13 +102,33 @@ void app_main(void) {
     char last = 0;
     uint32_t beats = 0;
     int64_t last_beat = 0;
+    char input[20] = ""; // typed claim buffer (carrier id etc.)
+    int ilen = 0;
 
     while (1) {
         char c = kbd_read();
         if (c != 0 && c != last) {
-            char data[32];
-            snprintf(data, sizeof(data), "{\"key\":\"%c\"}", (c >= 32 && c < 127) ? c : '?');
-            monaid_net_event("key", data);
+            if (c == '\r' || c == '\n') { // Enter: send claim
+                if (ilen > 0) {
+                    char data[48];
+                    snprintf(data, sizeof(data), "{\"text\":\"%s\"}", input);
+                    monaid_net_event("claim", data);
+                    char msg[32];
+                    snprintf(msg, sizeof(msg), "claimed: %s", input);
+                    ui_say(msg);
+                    ilen = 0; input[0] = 0;
+                }
+            } else if (c == 0x08) { // backspace
+                if (ilen > 0) { input[--ilen] = 0; }
+                char echo[26];
+                snprintf(echo, sizeof(echo), "> %s_", input);
+                ui_say(echo);
+            } else if (c >= 32 && c < 127 && ilen < (int)sizeof(input) - 1) {
+                input[ilen++] = c; input[ilen] = 0;
+                char echo[26];
+                snprintf(echo, sizeof(echo), "> %s_", input);
+                ui_say(echo);
+            }
         }
         last = c;
 

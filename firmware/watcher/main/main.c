@@ -106,6 +106,7 @@ void app_main(void) {
     uint32_t beats = 0;
     int64_t last_beat = 0;
     int64_t press_start = 0;
+    int last_vbus = -1; // -1 = unknown until first read
 
     while (1) {
         int32_t k = s_knob;
@@ -119,6 +120,20 @@ void app_main(void) {
 
         uint16_t pins;
         if (pca9535_get(&pins) == ESP_OK) {
+            // Charger module proof: the instant USB power arrives, say so.
+            int vbus = (pins & EXP_VBUS_IN_DET) ? 1 : 0;
+            if (vbus != last_vbus) {
+                if (last_vbus != -1) { // skip boot-time initial state
+                    char data[48];
+                    snprintf(data, sizeof(data), "{\"on\":%s,\"charging\":%s}",
+                             vbus ? "true" : "false",
+                             (pins & EXP_CHRG_DET) == 0 ? "true" : "false");
+                    monaid_net_event("power", data);
+                    ESP_LOGI(TAG, "power %s", vbus ? "ARRIVED" : "lost");
+                    if (!s_crashed) ui_say(vbus ? "power arrived!" : "power lost");
+                }
+                last_vbus = vbus;
+            }
             bool pressed = (pins & EXP_KNOB_BTN) == 0;
             int64_t now_ms = esp_timer_get_time() / 1000;
             if (pressed && press_start == 0) press_start = now_ms;

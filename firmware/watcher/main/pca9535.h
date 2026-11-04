@@ -4,6 +4,8 @@
 #include "esp_err.h"
 
 // Pin masks, bit N = expander pin N (P0.0..P0.7 = bits 0..7, P1.0..P1.7 = bits 8..15)
+#define EXP_CHRG_DET     (1u << 0) // charging (active low from charger IC)
+#define EXP_VBUS_IN_DET  (1u << 2) // USB power present
 #define EXP_KNOB_BTN     (1u << 3)
 #define EXP_PWR_SDCARD   (1u << 8)
 #define EXP_PWR_LCD      (1u << 9)

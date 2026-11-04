@@ -15,6 +15,7 @@ static uint16_t state_color(const char *s) {
     if (strcmp(s, "CLAIMED") == 0) return C_CYAN;
     if (strcmp(s, "JOB OPEN") == 0) return C_ORANGE;
     if (strcmp(s, "BIDDING") == 0) return 0xFFE0;
+    if (strcmp(s, "LOST") == 0) return 0xF81F; // magenta
     return C_SILVER;
 }
 
