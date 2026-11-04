@@ -3,6 +3,7 @@
 // printing the /feed stream as it goes. Nothing here touches the bridge's real code.
 //   happy (robot 1): crash → job posted → claim (worker demo-1) → power_on proof → worker paid
 //          --approval: crash with level "urgent" (0.03 MON) → waits for the owner → POST /owner/decide → then as above
+//          --muse:     like --approval, but Muse decides first (POST /muse/decide); on fallback the owner decides
 //   fail  (robot 2): crash → job posted → claim event (demo-2) → no proof → claim window passes → expired, escrow back
 // Also checks the rejections (no gas): wrong token, unknown robot, replayed seq, unknown worker.
 import { config } from "../src/chain.js";
@@ -13,7 +14,8 @@ const host = process.env.MONAID_API_HOST || apiCfg.host;
 const BASE = `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${process.env.MONAID_API_PORT || apiCfg.port}`;
 const TOKEN = readEnv().MONAID_API_TOKEN ?? "";
 const mode = process.argv.find((a) => ["happy", "fail", "all"].includes(a)) ?? "all";
-const withApproval = process.argv.includes("--approval");
+const withMuse = process.argv.includes("--muse");
+const withApproval = process.argv.includes("--approval") || withMuse;
 const CLAIM_WINDOW = (config as unknown as { jobs: { claimWindowSec: number } }).jobs.claimWindowSec;
 const [R1, R2] = config.robots.map((r) => r.id);
 
@@ -97,8 +99,24 @@ async function happy() {
   let jobId: string = ev.jobId;
   if (ev.action === "pending_approval") {
     show("GET /approvals?status=pending", await call("GET", "/approvals?status=pending"));
-    const d = show("owner decides: approve", await call("POST", "/owner/decide", { approvalId: ev.approvalId, decision: "approve" }));
-    jobId = d.jobId;
+    if (withMuse) {
+      // WhatsApp transport stand-in: the owner forwarded the link to Muse
+      const m = await call("POST", "/muse/decide", { approvalId: ev.approvalId });
+      const muse = m.body.muse ?? {};
+      console.log(
+        `→ ${"muse decides".padEnd(34)} ${m.status} ${muse.source}${muse.choice ? ` · ${muse.choice}` : ""} · ${muse.reason ?? `${muse.fallback}: ${muse.detail}`}` +
+          (m.body.applied?.tx?.link ? `\n${" ".repeat(40)}${m.body.applied.tx.link}` : ""),
+      );
+      if (muse.source === "muse" && muse.choice === "approve" && m.body.applied?.ok) jobId = m.body.applied.jobId;
+      else if (muse.source === "muse" && muse.choice === "reject") {
+        console.log("   Muse rejected the urgent job — happy path ends here (owner can still post another).");
+        return undefined;
+      }
+    }
+    if (!jobId) {
+      const d = show("owner decides: approve", await call("POST", "/owner/decide", { approvalId: ev.approvalId, decision: "approve" }));
+      jobId = d.jobId;
+    }
   }
   must(jobId, "a posted job");
   must(show("claim unknown worker", await call("POST", `/jobs/${jobId}/claim`, { worker: "mallory" })).error === "UNKNOWN_WORKER", "404 worker");

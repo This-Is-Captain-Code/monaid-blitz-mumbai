@@ -54,5 +54,13 @@
     "expiryCheckMs": 2000,
     "_note": "Events pick a payout TIER via data.level (normal|urgent), never an amount. urgent (0.03) is above the 0.02 owner-approval threshold."
   },
-  "workersFile": "workers.json"
+  "workersFile": "workers.json",
+  "muse": {
+    "model": "claude-opus-5-5",
+    "effort": "low",
+    "timeoutMs": 8000,
+    "maxTokens": 2000,
+    "ownerContextFile": "owner-context.json",
+    "_note": "Muse = the owner's decision agent (Claude API). Key: ANTHROPIC_API_KEY in agents/.env. Slower than timeoutMs, invalid, refused or no key → owner decides."
+  }
 }

@@ -106,6 +106,7 @@ export function createApi(service: MonaidService, token: string) {
       const claim = path.match(/^\/jobs\/([^/]+)\/claim$/);
       if (method === "POST" && claim) return send(res, 200, await service.claimJob(decodeURIComponent(claim[1]), await readJson(req)));
       if (method === "POST" && path === "/owner/decide") return send(res, 200, await service.decide(await readJson(req)));
+      if (method === "POST" && path === "/muse/decide") return send(res, 200, await service.museDecide(await readJson(req)));
       if (method === "POST" && path === "/admin/kill") return send(res, 200, service.kill(await readJson(req)));
       if (method === "POST" && path === "/admin/reset-seq") return send(res, 200, service.resetSeq(await readJson(req)));
 
