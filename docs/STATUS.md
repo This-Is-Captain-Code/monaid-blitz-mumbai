@@ -1,6 +1,6 @@
 # Monaid — Status
 
-_Last updated: 2026-11-04, end of P6; next P7._
+_Last updated: 2026-11-04, end of P7; next P8 (team picks the module)._
 
 **My scope:** `contracts/`, `agents/`, `shared/`, `docs/` only — wallets, funding, transactions, robot agents,
 Muse logic, guardrails, and an API for teammates. Firmware, broker, MQTT bridge, screens, portal UI and
@@ -15,10 +15,10 @@ WhatsApp transport belong to teammates.
 | P2 | Wallet manager and funding | done and merged (PR #2) |
 | P3 | Transaction sender | done and merged (PR #3) |
 | P4 | Jobs in the contract (MonaidCore v1.1) + sendTx latency pass | done and merged (PR #4) |
-| P5 | Robot agents and off-chain guardrails | done — branch `step5/agents` (not pushed, not merged) |
-| P6 | Agents API for teammates | **done** — branch `step6/api` (stacked on `step5/agents`, not merged) |
-| P7 | Muse (decision logic only) | **next** |
-| P8 | Module contract (Charger / Lost / Down, team picks) | — |
+| P5 | Robot agents and off-chain guardrails | done and merged (PR #5) |
+| P6 | Agents API for teammates | done and merged (PR #6) |
+| P7 | Muse (decision logic only) | **done** — branch `step7/muse` (not merged). **Needs ANTHROPIC_API_KEY for live decisions.** |
+| P8 | Module contract (Charger / Lost / Down, team picks) | **next — waiting for the team's pick** |
 | P9 | Demo hardening | — |
 
 ### Pending
@@ -35,6 +35,23 @@ WhatsApp transport belong to teammates.
 - Policy (`agents/policy.json`, defaults for every robot): maxPayoutPerJob **0.05**, maxSpendPerDay **0.5**,
   maxOpenJobs 2, ownerApprovalAbove **0.02** MON. On-chain cap (MonaidCore.maxPayout) 0.1 MON.
 - Claim window 60 s (`jobs.claimWindowSec`); the API's expiry watcher expires claimed jobs after it (fail path).
+
+## Muse (P7)
+
+Muse = the owner's decision agent (`agents/src/muse.ts`). It **decides, never sends transactions**: picks exactly one option id
+with a one-line reason via the Claude API (`claude-opus-5-5`, effort `low`, structured JSON output, server-side refusal
+fallback `fallbacks: "default"`). Invalid/empty output, refusal, > 8 s, API error or **no API key → owner decides**.
+Its pick is applied through `/owner/decide`, so every guardrail, the kill switch and on-chain caps still apply.
+Owner context: `agents/owner-context.json` (demo calendar: T-Deck demo 15:00, Watcher patrol 16:30). Config: `agents/config.json` → `muse`.
+
+- `POST /muse/decide` — approval mode `{approvalId}` (approve/reject, applied) or advice mode `{question, options}` (answer only).
+  Feed event `muse_decision` carries Muse's reason. WhatsApp transport contract: `docs/agents-api.md`.
+- **Pending: `ANTHROPIC_API_KEY` is not set**, so every live call so far fell back (`no_api_key`) — that path is proven
+  end to end (`mock:bridge -- happy --muse`: Muse fell back in 1 ms, owner approved, job 10 settled 0.03 MON → demo-1).
+  Add the key to `agents/.env`, then `npm run check:muse` for a real decision.
+- Finding: the SDK moves `enum` into the schema description (structured outputs don't enforce it), so the JSON shape is
+  guaranteed but option membership is enforced by our validator (`invalid_output` fallback).
+- Tests: 18 agents unit tests (8 for Muse: valid pick, invented option, empty reason, refusal, timeout, API error, parse failure, no key, bad input).
 
 ## Agents API (P6)
 
@@ -85,17 +102,17 @@ Machine-readable: `shared/addresses.json` (current + `history`) and `shared/abi/
 All keys in `agents/.env` (git-ignored); `contracts/` reads from it. Funding rules (`agents/config.json`): DEPLOYER hard floor
 **12 MON**; agent gas floor **1 MON**, top-up target **3 MON**, top-ups capped at **10 MON per UTC day**.
 
-| Name | Address | Role | Balance (end of P6) | Spendable |
+| Name | Address | Role | Balance (end of P7) | Spendable |
 |---|---|---|---|---|
 | DEPLOYER | `0x639B5bE0679EC82C7224F31d04bb3dD093222d5D` | owner / funder | 25.5257 MON | 13.5257 MON |
-| AGENT_1 | `0x31443AB8d8F13E16b86bfcDB4b965320E560824A` | agent, robot 1 | 4.4570 MON | 3.4570 MON |
+| AGENT_1 | `0x31443AB8d8F13E16b86bfcDB4b965320E560824A` | agent, robot 1 | 4.4218 MON | 3.4218 MON |
 | AGENT_2 | `0x16Cd0840ba8d68B526D5F5D9EB72626bB7A1CA45` | agent, robot 2 | 2.8614 MON | 1.8614 MON |
-| WORKER_DEMO_1 | `0x3D8117EE881F4e5Bc158A3428bdede3FcFcC4DD8` | demo worker `demo-1` | 0.04 MON | — |
+| WORKER_DEMO_1 | `0x3D8117EE881F4e5Bc158A3428bdede3FcFcC4DD8` | demo worker `demo-1` | 0.07 MON | — |
 | WORKER_DEMO_2 | `0xAECcb5bdc054fB555a0B1AE412aB50158dE9417E` | demo worker `demo-2` | 0 MON | — |
 
 | Robot | Robot address (derived from id, no key) | Agent | Balance in v1.1 |
 |---|---|---|---|
-| 1 | `0xB46d4FeCEFd31C1531FA84Dd61228b9Ea5107077` | AGENT_1 | 0.46 MON |
+| 1 | `0xB46d4FeCEFd31C1531FA84Dd61228b9Ea5107077` | AGENT_1 | 0.43 MON |
 | 2 | `0xE1f9bf1554a484d8993bF19e4cF02B79e4ccF254` | AGENT_2 | 0.499 MON |
 
 ## sendTx (`agents/src/tx.ts`)
@@ -171,6 +188,7 @@ Full table and demo instructions: `docs/guardrails.md`.
 | P2 | 0.0311 MON gas; 3 MON DEPLOYER → AGENT_2, 1 MON into v0. You added 15 MON to DEPLOYER. |
 | P3 | 0.0564 MON gas |
 | P3 timing tweak | 0.1683 MON gas |
+| P7 | 0.0352 MON gas (AGENT_1, one `--muse` mock run); 0.03 MON paid from robot 1 to demo-1 (recoverable) |
 | P6 | 0.1008 MON gas (AGENT_1 0.0703, AGENT_2 0.0305); 0.04 MON paid from robot 1 to demo-1 (recoverable) |
 | P5 | 0.1347 MON gas (AGENT_1 0.0435 guardrails demo, AGENT_2 0.0912 check:agent); 0.001 MON paid from robot 2 to a test worker |
 | P4 | ≈ 0.53 MON gas in total (two deploys ≈ 0.275, recoveries ≈ 0.046, registers/funds ≈ 0.041, gas measurement 0.111, check:oog ≈ 0.059). 1.985 MON recovered from v0/v1; 1 MON now in v1.1. |

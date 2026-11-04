@@ -11,7 +11,7 @@
     "topup:agents": "tsx scripts/topup-agents.ts",
     "demo:pay": "tsx scripts/demo-pay.ts",
     "proof:sendtx": "tsx scripts/nonce-proof.ts",
-    "test": "tsx --test test/tx.test.ts test/policy.test.ts",
+    "test": "tsx --test test/tx.test.ts test/policy.test.ts test/muse.test.ts",
     "time:pay": "tsx scripts/time-pay.ts",
     "check:refusals": "tsx scripts/check-refusals.ts",
     "recover:v0": "tsx scripts/recover-v0.ts",
@@ -22,11 +22,14 @@
     "check:agent": "tsx scripts/check-agent.ts",
     "api": "tsx scripts/api.ts",
     "api:token": "tsx scripts/api-token.ts",
-    "mock:bridge": "tsx scripts/mock-bridge.ts"
+    "mock:bridge": "tsx scripts/mock-bridge.ts",
+    "check:muse": "tsx scripts/check-muse.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.4.0",
     "dotenv": "^18.0.9",
-    "viem": "^2.57.16"
+    "viem": "^2.57.16",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",

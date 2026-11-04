@@ -278,7 +278,76 @@ data: {"time":"…","type":"tx","robot":"1","wallet":"AGENT_1","action":"settle"
 | `job_cancelled` | job withdrawn, escrow back | `idle` |
 | `blocked` | a guardrail stopped an action (`code`) | — |
 | `kill_switch` | engaged / released | — |
+| `muse_decision` | Muse answered (`choice`, `reason`) or fell back (`fallback`, `detail`) | show the reason |
 | `tx` | every transaction attempt (`result`: success, reverted, refused, blocked, out-of-gas, error) | — |
+
+---
+
+## `POST /muse/decide` — Muse, the owner's decision agent
+
+Muse **decides; it never sends transactions.** It reads the decision (options we build or you send) plus the
+owner's context (`agents/owner-context.json`: calendar, preferences) and asks Claude (`claude-opus-5-5`, effort
+`low`) to pick **exactly one option id** with a one-line reason, as schema-checked JSON. If the answer is invalid or
+empty, slower than **8 s**, refused, or there's no API key, Muse **falls back to "owner decides"**. Whatever Muse picks
+is then applied by the normal code path, so every guardrail, the kill switch and the on-chain caps still apply.
+
+### Approval mode — `{ "approvalId": "…" }`
+
+For an urgent job waiting for the owner. Muse chooses `approve` or `reject`; we apply it like `POST /owner/decide`.
+
+```sh
+curl -s -X POST $API/muse/decide -H "X-Monaid-Token: $TOKEN" -H "content-type: application/json" \
+  -d '{"approvalId":"7ec59435"}'
+```
+Muse decided and it was applied (shape exact; values illustrative until a live run with an API key):
+```json
+{ "ok": true, "mode": "approval", "approvalId": "7ec59435",
+  "muse": { "source": "muse", "choice": "approve", "reason": "Robot 1 runs the 15:00 demo; 0.03 MON protects it.", "ms": 2400, "model": "claude-opus-5-5" },
+  "applied": { "ok": true, "approvalId": "7ec59435", "decision": "approve", "jobId": "10",
+               "tx": { "hash": "0x…", "link": "https://testnet.monadscan.com/tx/0x…" } } }
+```
+Muse fell back (real response, no API key configured):
+```json
+{ "ok": true, "mode": "approval", "approvalId": "7ec59435",
+  "muse": { "source": "owner_decides", "fallback": "no_api_key", "detail": "ANTHROPIC_API_KEY not set in agents/.env", "ms": 1 },
+  "applied": null, "note": "Muse fell back: the approval stays pending — owner decides (POST /owner/decide)" }
+```
+Muse's pick blocked by a guardrail (e.g. the daily cap was hit meanwhile): `"applied": { "ok": false, "error": "PolicyBlockedError", "message": "Blocked (DAILY_CAP): …" }`.
+`fallback` is one of `no_api_key`, `timeout`, `invalid_output`, `refusal`, `api_error`.
+Unknown approval → `404 NOT_FOUND`; already decided → `409 BAD_REQUEST`.
+
+### Advice mode — `{ "question": "…", "options": [ … ] }`
+
+Muse only answers; **nothing is applied** — you act on the choice (e.g. which robot's screen shows first).
+2–8 options; `id` lowercase `a-z0-9_-` (max 32), `label` max 200 chars, optional `detail` max 300, `question` max 300.
+
+```sh
+curl -s -X POST $API/muse/decide -H "X-Monaid-Token: $TOKEN" -H "content-type: application/json" \
+  -d '{"question":"Which robot gets help first?","options":[{"id":"robot-1","label":"T-Deck: crashed, demo at 15:00"},{"id":"robot-2","label":"Watcher: crashed, patrol at 16:30"}]}'
+```
+Shape exact; values illustrative:
+```json
+{ "ok": true, "mode": "advice",
+  "muse": { "source": "muse", "choice": "robot-1", "reason": "The 15:00 demo depends on the T-Deck.", "ms": 2100, "model": "claude-opus-5-5" } }
+```
+Bad input → `400 BAD_REQUEST` (`"muse decision: options: 2–8 items"`).
+
+Every answer or fallback is also on the feed as `muse_decision` (with Muse's `reason`), so screens can show it.
+
+### WhatsApp transport (teammate's side) — exact contract
+
+The WhatsApp transport is yours; we only expose the endpoints above. The flow:
+
+1. Watch `GET /feed` for `approval_requested`. Send the owner a WhatsApp message with
+   `approval.summary` (e.g. "postJob 0.03 MON, claim window 60 s"), the robot, and a link the owner can forward to Muse.
+2. When the owner forwards it to Muse, call **`POST /muse/decide` with `{"approvalId": approval.id}`** — only the id.
+   Never put text from WhatsApp messages into the request: Muse only sees options we build.
+3. Reply to the owner with `muse.reason` and the outcome:
+   - `muse.source == "muse"` and `applied.ok` → "Muse approved/rejected: <reason>" (+ `applied.tx.link` if approved).
+   - `muse.source == "muse"` and `applied.ok == false` → "Muse chose <choice> but it was blocked: <applied.message>".
+   - `muse.source == "owner_decides"` → "Muse couldn't decide (<fallback>). Your call:" and offer approve / reject,
+     which you send as **`POST /owner/decide`** `{"approvalId": "…", "decision": "approve" | "reject"}`.
+4. The portal's **"owner decides"** button calls `POST /owner/decide` directly, any time — it does not wait for Muse.
 
 ---
 
@@ -290,4 +359,6 @@ npm run api:token        # once: MONAID_API_TOKEN into agents/.env (not printed)
 npm run api              # host/port from agents/config.json → api; or MONAID_API_HOST=0.0.0.0 npm run api
 npm run mock:bridge      # plays the bridge: rejections, happy path, fail path (waits ~60 s), then resets seq
 npm run mock:bridge -- happy --approval   # happy path with the owner-approval beat
+npm run mock:bridge -- happy --muse       # same, but Muse decides first (owner decides on fallback)
+npm run check:muse                        # one real Muse decision (needs ANTHROPIC_API_KEY in agents/.env)
 ```

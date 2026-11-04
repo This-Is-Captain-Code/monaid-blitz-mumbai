@@ -12,6 +12,7 @@ import { engageKillSwitch, killSwitch, releaseKillSwitch } from "./killswitch.js
 import { getJobRecord, listJobs, spentToday, type JobRecord } from "./ledger.js";
 import { resolveWorker, workerIdOf, workers } from "./workers.js";
 import type { TxResult } from "./tx.js";
+import { museDecide } from "./muse.js";
 
 const JOBS_CFG = (config as unknown as {
   jobs: { payouts: Record<string, string>; claimWindowSec: number; troubleKinds: string[]; proofKinds: string[]; expiryCheckMs: number };
@@ -146,6 +147,44 @@ export class MonaidService {
     }
     const r = (await approve(approvalId)) as { status: string; jobId?: string; tx?: TxResult };
     return { ok: true as const, approvalId, decision, jobId: r?.jobId, tx: r?.tx ? txRef(r.tx) : undefined };
+  }
+
+  // ---------------- POST /muse/decide ----------------
+
+  /**
+   * Approval mode `{ approvalId }`: Muse picks approve/reject for a pending approval; the pick is applied through
+   * decide() — every guardrail and the kill switch still apply. Fallback → the approval stays pending (owner decides).
+   * Advice mode `{ question, options }`: Muse only returns a choice; nothing is applied.
+   */
+  async museDecide(body: Record<string, unknown>) {
+    if (typeof body.approvalId === "string") {
+      const a = listApprovals().find((x) => x.id === body.approvalId);
+      if (!a) throw new ApiError(404, "NOT_FOUND", `No approval ${body.approvalId}`);
+      if (a.status !== "pending") throw new ApiError(409, "BAD_REQUEST", `Approval ${a.id} is already ${a.status}`);
+      const muse = await museDecide({
+        question: `Robot ${a.robot} wants to ${a.summary}, which is above the owner-approval threshold. Approve it?`,
+        options: [
+          { id: "approve", label: `Approve: ${a.summary}`, detail: a.reason ? `trigger: ${a.reason}`.slice(0, 300) : undefined },
+          { id: "reject", label: "Reject: keep the MON; the robot waits for the owner" },
+        ],
+      });
+      if (muse.source !== "muse") {
+        return { ok: true as const, mode: "approval" as const, approvalId: a.id, muse, applied: null, note: "Muse fell back: the approval stays pending — owner decides (POST /owner/decide)" };
+      }
+      try {
+        const applied = await this.decide({ approvalId: a.id, decision: muse.choice });
+        return { ok: true as const, mode: "approval" as const, approvalId: a.id, muse, applied };
+      } catch (e) {
+        // Muse's pick still had to pass every guardrail; report what stopped it.
+        return { ok: true as const, mode: "approval" as const, approvalId: a.id, muse, applied: { ok: false as const, error: (e as Error).name, message: (e as Error).message } };
+      }
+    }
+    try {
+      const muse = await museDecide({ question: body.question, options: body.options });
+      return { ok: true as const, mode: "advice" as const, muse };
+    } catch (e) {
+      throw new ApiError(400, "BAD_REQUEST", `muse decision: ${(e as Error).message}`);
+    }
   }
 
   // ---------------- POST /admin/kill ----------------
