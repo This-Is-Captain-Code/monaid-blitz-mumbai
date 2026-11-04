@@ -28,10 +28,10 @@ npm run wallet:new -- AGENT_2 # add another named wallet
 ```sh
 npm run compile
 npm test
-npm run deploy:testnet                     # deploys ignition/modules/Greeter.ts
-npm run verify:testnet -- <address> "gm Monad"   # needs ETHERSCAN_API_KEY for Monadscan
+npm run deploy:testnet                     # deploys ignition/modules/MonaidCore.ts
+npm run verify:testnet -- <address>         # Sourcify/MonadVision; Monadscan needs ETHERSCAN_API_KEY
 ```
 
-`Greeter.sol` is a placeholder to prove the pipeline — replace it with the project's contracts and add an Ignition module per deployment.
+`MonaidCore.sol` (v0): `registerRobot`, `fund`, `pay`, `balanceOf`, `pause`/`unpause`. Add an Ignition module per deployment.
 
 Notes: Hardhat 3 needs Node ≥ 22.13, so this uses Hardhat 2. `verify` sometimes prints an error even when verification succeeded — check the explorer.
