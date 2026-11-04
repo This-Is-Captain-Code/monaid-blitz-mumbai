@@ -2,16 +2,15 @@
 //   1. cancel open jobs, expire claimed ones (waits for the claim window if needed)
 //   2. top up each robot's balance in MonaidCore to 0.5 MON (DEPLOYER, floor-checked)
 //   3. top up agent gas wallets below their floor (to the target, daily cap applies)
-//   4. reset device seqs + release the kill switch on the running API (if it's up)
+//   4. clear the duplicate cache + release the kill switch on the running API (MONAID_API_URL or local)
 //   5. print balances and explorer links
 import { formatEther, parseEther } from "viem";
 import { account } from "../src/env.js";
-import { CORE_ABI, CORE_ADDRESS, FLOORS, addressLink, config, publicClient, robotConfig } from "../src/chain.js";
+import { CORE_ABI, CORE_ADDRESS, FLOORS, addressLink, apiBase, config, publicClient, robotConfig } from "../src/chain.js";
 import { RobotAgent } from "../src/robot-agent.js";
-import { listJobs } from "../src/ledger.js";
 import { warmFees } from "../src/fees.js";
 import { mon, recordTopup, toppedUpToday } from "../src/funding.js";
-import { describe, sendTx } from "../src/tx.js";
+import { TxRevertedError, describe, sendTx } from "../src/tx.js";
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { AGENTS_DIR, readEnv } from "../src/env.js";
@@ -21,7 +20,18 @@ warmFees();
 const read = <T>(functionName: string, args: readonly unknown[]) =>
   publicClient.readContract({ address: CORE_ADDRESS, abi: CORE_ABI, functionName, args }) as Promise<T>;
 const STATUS = ["None", "Open", "Claimed", "Settled", "Expired", "Cancelled"];
+const rc0 = (id: string) => robotConfig(id).address;
 let gas = 0n;
+
+/** The deployed service may close the same job a moment earlier (its expiry watcher): that's fine, not an error. */
+async function closeQuietly(fn: () => Promise<{ fee: bigint; link: string }>) {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e instanceof TxRevertedError && /JobNotOpen|JobNotClaimed|AlreadySettled/.test(e.message)) return undefined;
+    throw e;
+  }
+}
 
 console.log(`reset:demo · MonaidCore ${CORE_ADDRESS}\n`);
 
@@ -29,13 +39,20 @@ console.log(`reset:demo · MonaidCore ${CORE_ADDRESS}\n`);
 console.log("1. open/claimed jobs");
 for (const r of config.robots) {
   const agent = new RobotAgent(r.id);
-  for (const j of listJobs(r.id)) {
+  // Read jobs from the CHAIN (the deployed service keeps its own job records): last 40 job ids, this robot only.
+  const count = Number(await read<bigint>("jobCount", []));
+  const mine: { jobId: string; status: string }[] = [];
+  for (let id = count; id >= 1 && id > count - 40; id--) {
+    const job = await read<{ robot: string; status: number }>("getJob", [BigInt(id)]);
+    if (job.robot.toLowerCase() === rc0(r.id).toLowerCase()) mine.push({ jobId: String(id), status: STATUS[job.status] });
+  }
+  for (const j of mine) {
     const onchain = await read<{ status: number; claimedAt: bigint; claimWindow: bigint }>("getJob", [BigInt(j.jobId)]);
     const status = STATUS[onchain.status];
     if (status === "Open") {
-      const t = await agent.cancel(j.jobId, "reset:demo");
-      gas += t.fee;
-      console.log(`   ${r.id} job ${j.jobId}: cancelled ${t.link}`);
+      const t = await closeQuietly(() => agent.cancel(j.jobId, "reset:demo"));
+      if (t) gas += t.fee;
+      console.log(`   ${r.id} job ${j.jobId}: ${t ? `cancelled ${t.link}` : "already closed (by the service)"}`);
     } else if (status === "Claimed") {
       const deadline = Number(onchain.claimedAt + onchain.claimWindow);
       let chainNow = Number((await publicClient.getBlock()).timestamp);
@@ -44,11 +61,9 @@ for (const r of config.robots) {
         await new Promise((res) => setTimeout(res, 1000));
         chainNow = Number((await publicClient.getBlock()).timestamp);
       }
-      const t = await agent.expire(j.jobId, "reset:demo");
-      gas += t.fee;
-      console.log(`   ${r.id} job ${j.jobId}: expired ${t.link}`);
-    } else if (status !== j.status) {
-      await agent.refreshJob(j.jobId);
+      const t = await closeQuietly(() => agent.expire(j.jobId, "reset:demo"));
+      if (t) gas += t.fee;
+      console.log(`   ${r.id} job ${j.jobId}: ${t ? `expired ${t.link}` : "already closed (by the service's expiry watcher)"}`);
     }
   }
 }
@@ -91,8 +106,7 @@ for (const r of config.robots) {
 
 // 4. API state
 console.log("4. API state");
-const apiCfg = (config as unknown as { api: { host: string; port: number } }).api;
-const BASE = `http://${apiCfg.host === "0.0.0.0" ? "127.0.0.1" : apiCfg.host}:${apiCfg.port}`;
+const BASE = apiBase(); // MONAID_API_URL=https://… for the public deployment
 const H = { "content-type": "application/json", "x-monaid-token": readEnv().MONAID_API_TOKEN ?? "" };
 const up = await fetch(`${BASE}/health`).then((r) => r.ok).catch(() => false);
 if (up) {

@@ -5,12 +5,10 @@
 // act on m.robotId + m.screen) and checks every screen line we emit.
 //   happy: crash on robot 2 (Watcher) → RAJ-7 typed on robot 1 (T-Deck) claims it → recover on robot 2 → PAID on both
 //   fail:  crash on robot 2 → Watcher click claims (DEMO-1) → heartbeats only, no recover → expired after the window → BLOCKED
-import { config } from "../src/chain.js";
+import { apiBase, config } from "../src/chain.js";
 import { readEnv } from "../src/env.js";
 
-const apiCfg = (config as unknown as { api: { host: string; port: number } }).api;
-const host = process.env.MONAID_API_HOST || apiCfg.host;
-const BASE = `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${process.env.MONAID_API_PORT || apiCfg.port}`;
+const BASE = apiBase(); // MONAID_API_URL=https://… to run against the public deployment
 const TOKEN = readEnv().MONAID_API_TOKEN ?? "";
 const mode = process.argv.find((a) => ["happy", "fail", "all"].includes(a)) ?? "all";
 const CLAIM_WINDOW = (config as unknown as { jobs: { claimWindowSec: number } }).jobs.claimWindowSec;

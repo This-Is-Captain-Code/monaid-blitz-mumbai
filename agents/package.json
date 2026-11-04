@@ -27,15 +27,20 @@
     "reset:demo": "tsx scripts/reset-demo.ts",
     "preflight": "tsx scripts/preflight.ts",
     "check:claude": "tsx scripts/check-muse.ts",
-    "check:agent-decision": "tsx scripts/check-muse.ts"
+    "check:agent-decision": "tsx scripts/check-muse.ts",
+    "start": "tsx scripts/api.ts",
+    "check:hosted": "tsx scripts/check-hosted.ts"
   },
   "dependencies": {
     "dotenv": "^18.0.9",
-    "viem": "^2.57.16"
+    "viem": "^2.57.16",
+    "tsx": "^4.23.15"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
-    "tsx": "^4.23.15",
     "typescript": "~5.8"
+  },
+  "engines": {
+    "node": ">=20 <21"
   }
 }

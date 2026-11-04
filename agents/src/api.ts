@@ -5,6 +5,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { timingSafeEqual } from "node:crypto";
 import { BaseError } from "viem";
 import { bus, type FeedEvent } from "./bus.js";
+import { readEnv } from "./env.js";
 import { ApiError, MonaidService } from "./service.js";
 import { PolicyBlockedError } from "./robot-agent.js";
 import { KillSwitchError } from "./killswitch.js";
@@ -23,7 +24,7 @@ export function createApi(service: MonaidService, token: string) {
   };
 
   const send = (res: ServerResponse, status: number, body: unknown) => {
-    res.writeHead(status, { "content-type": "application/json; charset=utf-8", ...cors });
+    res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
     res.end(JSON.stringify(body));
   };
 
@@ -78,9 +79,10 @@ export function createApi(service: MonaidService, token: string) {
     const url = new URL(req.url ?? "/", "http://local");
     const path = url.pathname.replace(/\/+$/, "") || "/";
     const method = req.method ?? "GET";
+    for (const [k, v] of Object.entries(corsHeaders(req.headers.origin))) res.setHeader(k, v);
     try {
       if (method === "OPTIONS") {
-        res.writeHead(204, cors);
+        res.writeHead(204);
         return res.end();
       }
       if (method === "GET" && path === "/health") return send(res, 200, { ok: true, service: "monaid-agents", version: 1 });
@@ -91,7 +93,11 @@ export function createApi(service: MonaidService, token: string) {
       if (!authorized(tok) && !authorized(viaQuery)) throw new ApiError(401, "UNAUTHORIZED", "missing or wrong X-Monaid-Token");
 
       if (method === "GET" && path === "/feed") {
-        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", ...cors });
+        // SSE through a proxy/CDN (Render): no buffering, no transforms, headers out immediately, no socket timeout.
+        req.socket.setTimeout(0);
+        req.socket.setNoDelay(true);
+        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
+        res.flushHeaders();
         res.write(`data: ${JSON.stringify({ time: new Date().toISOString(), type: "hello" })}\n\n`);
         clients.add(res);
         req.on("close", () => clients.delete(res));
@@ -126,8 +132,11 @@ export function createApi(service: MonaidService, token: string) {
   return server;
 }
 
-const cors = {
-  "access-control-allow-origin": "*",
-  "access-control-allow-headers": "content-type, x-monaid-token",
-  "access-control-allow-methods": "GET, POST, OPTIONS",
-};
+/** CORS: CORS_ORIGIN = comma-separated allowed origins (the portal's); unset → any origin. The token is required either way. */
+function corsHeaders(origin: string | undefined): Record<string, string> {
+  const allowed = (readEnv().CORS_ORIGIN || "*").split(",").map((o) => o.trim()).filter(Boolean);
+  const base = { "access-control-allow-headers": "content-type, x-monaid-token", "access-control-allow-methods": "GET, POST, OPTIONS" };
+  if (allowed.includes("*")) return { ...base, "access-control-allow-origin": "*" };
+  if (origin && allowed.includes(origin)) return { ...base, "access-control-allow-origin": origin, vary: "Origin" };
+  return { vary: "Origin" };
+}

@@ -11,7 +11,12 @@ export const ENV_PATH = join(AGENTS_DIR, ".env");
 const SUFFIX = "_PRIVATE_KEY";
 
 export const readEnvText = () => (existsSync(ENV_PATH) ? readFileSync(ENV_PATH, "utf8") : "");
-export const readEnv = (): Record<string, string> => parse(readEnvText());
+/** Secrets/settings we read: from agents/.env locally, or from the host's environment (e.g. Render) where there is no file. */
+const ENV_KEYS = /^(?:[A-Z][A-Z0-9_]*_PRIVATE_KEY|MONAID_API_TOKEN|OPENROUTER_API_KEY|MONAID_RPC_URL|MONAID_KILL|CORS_ORIGIN)$/;
+export const readEnv = (): Record<string, string> => {
+  const fromHost = Object.fromEntries(Object.entries(process.env).filter(([k, v]) => ENV_KEYS.test(k) && v)) as Record<string, string>;
+  return { ...fromHost, ...parse(readEnvText()) }; // the local file wins when both exist
+};
 
 export function assertWalletName(name: string) {
   if (!/^[A-Z][A-Z0-9_]*$/.test(name)) throw new Error(`Bad wallet name "${name}" (use e.g. DEPLOYER, AGENT_2)`);

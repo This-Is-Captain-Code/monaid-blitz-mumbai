@@ -86,3 +86,11 @@ export function roleOf(name: string): string {
 /** Balance a wallet must keep. DEPLOYER: hard floor (sends value). Agents: gas floor. */
 export const floorOf = (name: string) =>
   name === "DEPLOYER" ? FLOORS.deployer : name.startsWith("WORKER_") ? 0n : FLOORS.agentGas; // workers: no floor
+
+/** Base URL of the Agents API for scripts: MONAID_API_URL (e.g. the public Render URL) or the local config. */
+export function apiBase(): string {
+  if (process.env.MONAID_API_URL) return process.env.MONAID_API_URL.replace(/\/+$/, "");
+  const a = (config as unknown as { api: { host: string; port: number } }).api;
+  const host = process.env.MONAID_API_HOST || a.host;
+  return `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${process.env.MONAID_API_PORT || a.port}`;
+}

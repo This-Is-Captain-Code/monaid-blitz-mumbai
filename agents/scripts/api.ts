@@ -10,8 +10,9 @@ import { killSwitch } from "../src/killswitch.js";
 import { bus } from "../src/bus.js";
 
 const apiCfg = (config as unknown as { api: { host: string; port: number } }).api;
-const host = process.env.MONAID_API_HOST || apiCfg.host;
-const port = Number(process.env.MONAID_API_PORT || apiCfg.port);
+// Hosts like Render set PORT and need us on 0.0.0.0 (they terminate HTTPS in front of us).
+const host = process.env.MONAID_API_HOST || (process.env.PORT ? "0.0.0.0" : apiCfg.host);
+const port = Number(process.env.PORT || process.env.MONAID_API_PORT || apiCfg.port);
 
 warmFees();
 const service = new MonaidService();
