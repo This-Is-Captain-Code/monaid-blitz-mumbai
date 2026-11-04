@@ -7,7 +7,8 @@
     "wallet:new": "ts-node scripts/new-wallet.ts",
     "balance": "hardhat run scripts/balance.ts --network monadTestnet",
     "deploy:testnet": "hardhat ignition deploy ignition/modules/MonaidCore.ts --network monadTestnet",
-    "verify:testnet": "hardhat verify --network monadTestnet"
+    "verify:testnet": "hardhat verify --network monadTestnet",
+    "demo:pay": "hardhat run scripts/demo-pay.ts --network monadTestnet"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-ignition-viem": "^0.15.17",
