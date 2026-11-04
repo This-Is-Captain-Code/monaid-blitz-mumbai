@@ -1,0 +1,22 @@
+{
+  "name": "monaid-contracts",
+  "version": "1.0.0",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "wallet:new": "hardhat run scripts/new-wallet.ts",
+    "balance": "hardhat run scripts/balance.ts --network monadTestnet",
+    "deploy:testnet": "hardhat ignition deploy ignition/modules/Greeter.ts --network monadTestnet",
+    "verify:testnet": "hardhat verify --network monadTestnet"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ignition-viem": "^0.15.17",
+    "@nomicfoundation/hardhat-toolbox-viem": "^3.0.0",
+    "@types/node": "^26.6.6",
+    "dotenv": "^18.0.9",
+    "hardhat": "^2.29.1",
+    "ts-node": "^10.9.2",
+    "typescript": "~5.8"
+  },
+  "private": true
+}
