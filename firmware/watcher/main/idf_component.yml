@@ -1,0 +1,4 @@
+dependencies:
+  idf: ">=5.2.0"
+  espressif/esp_lcd_spd2010:
+    version: "1.0.1"
