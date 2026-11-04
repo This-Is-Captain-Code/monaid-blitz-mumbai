@@ -1,364 +1,162 @@
 # Monaid Agents API (v1)
 
-The boundary between our agents (wallets, robot agents, guardrails, chain) and the teammates' **bridge** (MQTT ↔ HTTP)
-and **portal**. You call us over HTTP; we never reach into your code. Types: `shared/api-types.ts`.
+The boundary between our agents (wallets, robot agents, guardrails, chain) and the teammates' **bridge** (MQTT ↔ HTTP,
+`server/bridge` on `step/firmware-net`) and **portal**. Types: `shared/api-types.ts`.
 
-- **Base URL:** `http://<laptop-ip>:8787` (on the day: the laptop's hotspot IP; we print it on start).
-  Locally: `http://127.0.0.1:8787`.
-- **Auth:** every request except `GET /health` needs the header `X-Monaid-Token: <token>`.
-  `GET /feed` also accepts `?token=<token>` (browser `EventSource` can't set headers).
-  The token is shared privately by the owner — never commit it.
-- **Bodies:** JSON, max 16 KB. Responses are JSON with `"ok": true` or an error (below).
-- **Amounts** are MON as decimal strings (`"0.01"`). **Times:** `ts` / `claimDeadline` are unix seconds; `*At` are ISO strings.
-- **Latency:** requests that send a transaction answer **after** it is confirmed (~1–3 s). The response carries the
-  tx hash and an explorer link. Everything also appears on `GET /feed`.
-- **CORS:** `*` (the portal can call from a browser).
-
-In the examples, set these once:
+- **Base URL:** `http://<laptop-ip>:4000` (the bridge's default `AGENTS_API=http://localhost:4000` works when it runs on
+  the same laptop). Start with `npm run api` in `agents/` (`MONAID_API_HOST=0.0.0.0` to accept other machines).
+- **Auth:** every request except `GET /health` needs header `x-monaid-token: <token>`. The owner shares the token value
+  privately (it is `MONAID_API_TOKEN` in our `agents/.env`; the bridge calls it `MONAID_TOKEN`). `GET /feed` also accepts
+  `?token=`.
+- **Bodies:** JSON, max 16 KB. Responses: `{"ok": true, …}` or an error (below). Amounts are MON strings.
+- **Latency:** an event that sends a transaction answers after it is confirmed (~1–5 s), with the tx link.
 
 ```sh
-API=http://127.0.0.1:8787
-TOKEN=...   # from the owner
+API=http://127.0.0.1:4000
+TOKEN=...   # from the owner, never commit it
 ```
-
----
-
-## Errors
-
-```json
-{ "ok": false, "error": "STALE_SEQ", "message": "seq 1 <= last accepted 1 for robot 1 (duplicate or replay)" }
-```
-
-| HTTP | `error` | When |
-|---|---|---|
-| 400 | `BAD_REQUEST` | malformed JSON, missing/invalid field, unknown event `kind` |
-| 401 | `UNAUTHORIZED` | missing or wrong `X-Monaid-Token` |
-| 403 | `BLOCKED` | an off-chain guardrail said no; `code` = `PAYOUT_ABOVE_POLICY` / `DAILY_CAP` / `TOO_MANY_OPEN_JOBS` / `ACTION_NOT_ALLOWED` |
-| 404 | `UNKNOWN_ROBOT` | `robotId` not configured |
-| 404 | `UNKNOWN_WORKER` | worker ID not in the registry |
-| 404 | `UNKNOWN_JOB` | job id not known on the current contract |
-| 404 | `NOT_FOUND` | unknown route or approval id |
-| 409 | `STALE_SEQ` | `seq` ≤ last accepted seq for that robot (duplicate or replay) |
-| 409 | `REFUSED` | DEPLOYER floor (owner wallet too low) |
-| 413 | `BAD_REQUEST` | body over 16 KB |
-| 422 | `REVERTED` | MonaidCore said no; `code` = the contract error (`JobNotOpen`, `ClaimExpired`, `AlreadySettled`, …); `link` if it reached the chain |
-| 503 | `KILL_SWITCH` | the kill switch is engaged: nothing is sent |
-| 500 | `INTERNAL` | anything else (RPC down, …) |
-
----
 
 ## Robots and workers
 
-- **Robot IDs** are the ids in `agents/config.json` (today `"1"` and `"2"`). They are config-only and may change to match
-  the devices' MQTT usernames. **The bridge sends the robot id it derives from the MQTT topic, never one found in a
-  device payload.** Unknown ids → `404 UNKNOWN_ROBOT`. `GET /robots` lists the current ones.
-- **Workers** (the humans who fix robots) are registered in `agents/workers.json` as **short ID → wallet address**.
-  Claims carry **only the worker ID**; the payout address always comes from the registry, never from the request.
-  Unknown IDs → `404 UNKNOWN_WORKER`. Pre-registered demo workers: `demo-1`, `demo-2`. The owner adds judges' IDs on
-  the day (then restarts the API). IDs: lowercase letters, digits, `-`, `_`, max 32 chars. `GET /workers` lists them.
-
----
-
-## `POST /events` — the bridge forwards one device event
-
-```json
-{ "robotId": "1", "kind": "crash", "seq": 42, "ts": 1730700000, "data": {} }
-```
-
-| Field | Rules |
-|---|---|
-| `robotId` | string, a configured robot id (from the MQTT topic) |
-| `kind` | one of `claim`, `power_on`, `power_off`, `beacon_seen`, `knob`, `key`, `crash` |
-| `seq` | non-negative integer, **strictly increasing per robot**. `seq` ≤ last accepted → `409 STALE_SEQ`, nothing happens. The seq is accepted before acting, so a retried request never acts twice. |
-| `ts` | integer unix seconds (device time) |
-| `data` | object, optional. Everything in it is **untrusted data**: recorded, never treated as instructions. Only the fields below are read. |
-
-**What each kind does (core, before a module is chosen):**
-
-| `kind` | Agent action | `action` in the response |
+| Device (MQTT username) | robotId the bridge sends | Our robot id |
 |---|---|---|
-| `crash` | Trouble. If the robot has no open/claimed job, post one: payout tier from `data.level` — `"normal"` (default) **0.01 MON**, `"urgent"` **0.03 MON**; claim window **60 s**. Urgent is above the 0.02 MON owner-approval threshold, so it **waits for the owner** (`POST /owner/decide`). If a job is already active → `ignored`. | `job_posted` / `pending_approval` / `ignored` |
-| `claim` | A worker claimed on the device. `data.worker` = worker ID (required, must be registered). Records the claim on the robot's open job. No open job → `ignored`. | `claim_accepted` / `ignored` |
-| `power_on` | **Proof** (the robot is back). If the robot has a claimed job inside its window → settle: the worker is paid. Otherwise `ignored`. | `job_settled` / `ignored` |
-| `power_off`, `beacon_seen`, `knob`, `key` | Logged and put on the feed; no core action yet (modules may use them later). | `ignored` |
+| tdeck-01 (T-Deck) | `1` | `tdeck-01` |
+| watcher-01 (Watcher) | `2` | `watcher-01` |
 
-`data.level` can only pick a tier; amounts are never taken from events.
+`robotId` may be the number (`1`), the string (`"1"`), or our id (`"tdeck-01"`). Unknown → `404 UNKNOWN_ROBOT`.
 
-```sh
-curl -s -X POST $API/events -H "X-Monaid-Token: $TOKEN" -H "content-type: application/json" \
-  -d '{"robotId":"1","kind":"crash","seq":42,"ts":1730700000,"data":{}}'
-```
-```json
-{ "ok": true, "robotId": "1", "seq": 42, "action": "job_posted", "jobId": "9", "payout": "0.01",
-  "tx": { "hash": "0x…", "link": "https://testnet.monadscan.com/tx/0x…" } }
-```
+**Workers** are identified by a short ID typed on the T-Deck (`claim` with `data.text`), matched case-insensitively.
+Registered now: **`RAJ-7`, `DEMO-1`, `DEMO-2`** (all pay the demo-1 wallet `0x3D8117EE881F4e5Bc158A3428bdede3FcFcC4DD8` for
+now). A Watcher `click` claims as `DEMO-1`. An unknown ID is ignored (200) and the device that sent it shows
+`UNKNOWN WORKER`. The payout address always comes from our registry (`agents/workers.json`), never from the event.
 
-Urgent (approval beat):
-```sh
-curl -s -X POST $API/events -H "X-Monaid-Token: $TOKEN" -H "content-type: application/json" \
-  -d '{"robotId":"1","kind":"crash","seq":43,"ts":1730700001,"data":{"level":"urgent"}}'
-```
-```json
-{ "ok": true, "robotId": "1", "seq": 43, "action": "pending_approval", "approvalId": "f30bd443", "payout": "0.03",
-  "note": "postJob 0.03 MON, claim window 60 s" }
-```
+## Errors
 
-Claim from the device:
-```sh
-curl -s -X POST $API/events -H "X-Monaid-Token: $TOKEN" -H "content-type: application/json" \
-  -d '{"robotId":"2","kind":"claim","seq":44,"ts":1730700005,"data":{"worker":"demo-2"}}'
-```
-```json
-{ "ok": true, "robotId": "2", "seq": 44, "action": "claim_accepted", "jobId": "8", "worker": "demo-2",
-  "tx": { "hash": "0x…", "link": "https://testnet.monadscan.com/tx/0x…" } }
-```
+`{ "ok": false, "error": "<CODE>", "message": "…" }`
 
-Proof:
-```sh
-curl -s -X POST $API/events -H "X-Monaid-Token: $TOKEN" -H "content-type: application/json" \
-  -d '{"robotId":"1","kind":"power_on","seq":45,"ts":1730700030}'
-```
-```json
-{ "ok": true, "robotId": "1", "seq": 45, "action": "job_settled", "jobId": "7", "worker": "demo-1", "payout": "0.03",
-  "tx": { "hash": "0x…", "link": "https://testnet.monadscan.com/tx/0x…" } }
-```
-
-Nothing to do:
-```json
-{ "ok": true, "robotId": "1", "seq": 1, "action": "ignored", "note": "knob has no core action" }
-```
-
-Replay:
-```json
-{ "ok": false, "error": "STALE_SEQ", "message": "seq 1 <= last accepted 1 for robot 1 (duplicate or replay)" }
-```
-
----
-
-## `POST /jobs/:id/claim` — claim from the portal
-
-```sh
-curl -s -X POST $API/jobs/9/claim -H "X-Monaid-Token: $TOKEN" -H "content-type: application/json" \
-  -d '{"worker":"demo-1"}'
-```
-```json
-{ "ok": true, "jobId": "9", "robotId": "1", "worker": "demo-1", "workerAddress": "0x3D8117EE881F4e5Bc158A3428bdede3FcFcC4DD8",
-  "claimDeadline": 1793785262, "tx": { "hash": "0x…", "link": "https://testnet.monadscan.com/tx/0x…" } }
-```
-
-Errors: `UNKNOWN_WORKER` (`{"ok":false,"error":"UNKNOWN_WORKER","message":"Unknown worker \"mallory\""}`), `UNKNOWN_JOB`,
-`REVERTED` with `code: "JobNotOpen"` if it's already claimed/closed.
-
-After `claimDeadline` without a proof, **the agent expires the job automatically** (escrow back to the robot) and
-posts `job_expired` on the feed — that's the fail path. Screens show `blocked`.
-
----
-
-## `POST /owner/decide` — the owner's pick ("owner decides" button, or when Muse is slow)
-
-```sh
-curl -s -X POST $API/owner/decide -H "X-Monaid-Token: $TOKEN" -H "content-type: application/json" \
-  -d '{"approvalId":"f30bd443","decision":"approve"}'
-```
-```json
-{ "ok": true, "approvalId": "f30bd443", "decision": "approve", "jobId": "7",
-  "tx": { "hash": "0x…", "link": "https://testnet.monadscan.com/tx/0x…" } }
-```
-
-`"decision": "reject"` → `{ "ok": true, "approvalId": "…", "decision": "reject" }`, nothing sent.
-Approving re-checks every other guardrail first (it can still return `BLOCKED` or `KILL_SWITCH`).
-Unknown id → `404 NOT_FOUND`; already decided → `409 BAD_REQUEST`.
-
-## `GET /approvals[?status=pending|approved|rejected]`
-
-```json
-{ "ok": true, "approvals": [ { "id": "f30bd443", "robot": "1", "action": "postJob",
-  "summary": "postJob 0.03 MON, claim window 60 s", "reason": "crash event seq 43 (urgent)",
-  "createdAt": "2026-11-04T09:40:00.900Z", "status": "pending" } ] }
-```
-
----
-
-## `POST /admin/kill` — kill switch
-
-```sh
-curl -s -X POST $API/admin/kill -H "X-Monaid-Token: $TOKEN" -H "content-type: application/json" \
-  -d '{"engaged":true,"reason":"demo"}'
-```
-```json
-{ "ok": true, "engaged": true, "reason": "demo", "since": "2026-11-04T09:41:24.239Z" }
-```
-While engaged, anything that would send a transaction returns
-`503 {"ok":false,"error":"KILL_SWITCH","message":"Blocked (KILL_SWITCH): Kill switch engaged (demo): no transactions are sent"}`.
-Release with `{"engaged":false}` → `{ "ok": true, "engaged": false, "reason": "", "since": null }`.
-
-## `POST /admin/reset-seq` — rehearsals only
-
-Forgets the last accepted `seq` (all robots, or `{"robotId":"1"}`), so a device can start counting from 0 again after
-a reboot or a mock run. `{ "ok": true, "reset": ["1", "2"] }`
-
----
-
-## `GET /robots`
-
-```sh
-curl -s $API/robots -H "X-Monaid-Token: $TOKEN"
-```
-```json
-{
-  "ok": true,
-  "core": "0x3DbE227ad91Cc3bfa14468196F413173dF893867",
-  "killSwitch": { "ok": true, "engaged": false, "reason": "", "since": null },
-  "robots": [
-    { "robotId": "1", "robotAddress": "0xB46d4FeCEFd31C1531FA84Dd61228b9Ea5107077",
-      "agent": "AGENT_1", "agentAddress": "0x31443AB8d8F13E16b86bfcDB4b965320E560824A",
-      "agentBalance": "4.49212515499997585", "balance": "0.47", "escrow": "0",
-      "openJobs": 0, "spentToday": "0.03", "lastSeq": 45, "lastEventAt": "2026-11-04T09:40:02.700Z" }
-  ]
-}
-```
-`balance` = robot's free MON in MonaidCore, `escrow` = locked in open/claimed jobs, `agentBalance` = the agent's gas wallet.
-
-## `GET /jobs[?robotId=1]`
-
-Newest first.
-```json
-{ "ok": true, "jobs": [ {
-  "jobId": "7", "robotId": "1", "status": "Settled", "payout": "0.03", "claimWindow": 60,
-  "worker": "demo-1", "workerAddress": "0x3D8117EE881F4e5Bc158A3428bdede3FcFcC4DD8", "claimDeadline": 1793785262,
-  "postedAt": "2026-11-04T09:40:01.739Z",
-  "txs": [ { "action": "postJob", "hash": "0x3b47…", "link": "https://testnet.monadscan.com/tx/0x3b47…" },
-           { "action": "claim",   "hash": "0x1e8e…", "link": "https://testnet.monadscan.com/tx/0x1e8e…" },
-           { "action": "settle",  "hash": "0x0634…", "link": "https://testnet.monadscan.com/tx/0x0634…" } ] } ] }
-```
-`status`: `Open` → `Claimed` → `Settled` | `Expired`; or `Open` → `Cancelled`.
-
-## `GET /workers`
-
-```json
-{ "ok": true, "workers": [ { "id": "demo-1", "address": "0x3D8117EE881F4e5Bc158A3428bdede3FcFcC4DD8" },
-                            { "id": "demo-2", "address": "0xAECcb5bdc054fB555a0B1AE412aB50158dE9417E" } ] }
-```
-
-## `GET /health` (no token)
-
-`{ "ok": true, "service": "monaid-agents", "version": 1 }`
-
----
-
-## `GET /feed` — live updates (Server-Sent Events)
-
-```sh
-curl -N "$API/feed?token=$TOKEN"
-```
-Browser: `new EventSource(API + "/feed?token=" + TOKEN)`. One JSON object per `data:` line; `: ping` comments every 15 s.
-
-```
-data: {"time":"…","type":"hello"}
-data: {"time":"…","type":"event","robot":"1","kind":"crash","seq":43,"ts":1730700001}
-data: {"time":"…","type":"approval_requested","robot":"1","approval":{"id":"f30bd443","summary":"postJob 0.03 MON, claim window 60 s",…}}
-data: {"time":"…","type":"approval_decided","robot":"1","id":"f30bd443","decision":"approved"}
-data: {"time":"…","type":"job_posted","robot":"1","jobId":"7","payout":"0.03","claimWindow":60,"link":"https://testnet.monadscan.com/tx/0x…","reason":"…"}
-data: {"time":"…","type":"job_claimed","robot":"1","jobId":"7","worker":"0x3D81…","claimDeadline":1793785262,"link":"…"}
-data: {"time":"…","type":"job_settled","robot":"1","jobId":"7","worker":"0x3D81…","payout":"0.03","link":"…"}
-data: {"time":"…","type":"job_expired","robot":"2","jobId":"8","link":"…"}
-data: {"time":"…","type":"blocked","robot":"1","action":"postJob","code":"DAILY_CAP","message":"…"}
-data: {"time":"…","type":"kill_switch","engaged":true,"reason":"demo"}
-data: {"time":"…","type":"tx","robot":"1","wallet":"AGENT_1","action":"settle","result":"success","hash":"0x…","link":"…",…}
-```
-
-| `type` | Meaning | Suggested screen state |
+| HTTP | `error` | When |
 |---|---|---|
-| `event` | a device event was accepted | — |
-| `approval_requested` / `approval_decided` | waiting for / got the owner's decision | `bidding` / — |
-| `job_posted` | job open, MON escrowed | `job_open` |
-| `job_claimed` | worker recorded, window running until `claimDeadline` | `claimed` |
-| `job_settled` | worker paid | `paid` |
-| `job_expired` | window passed without proof, escrow back | `blocked` |
-| `job_cancelled` | job withdrawn, escrow back | `idle` |
-| `blocked` | a guardrail stopped an action (`code`) | — |
-| `kill_switch` | engaged / released | — |
-| `muse_decision` | Muse answered (`choice`, `reason`) or fell back (`fallback`, `detail`) | show the reason |
-| `tx` | every transaction attempt (`result`: success, reverted, refused, blocked, out-of-gas, error) | — |
+| 400 | `BAD_REQUEST` | bad JSON / field, unknown `kind` |
+| 401 | `UNAUTHORIZED` | missing or wrong token |
+| 403 | `BLOCKED` | a guardrail said no (`code`: `PAYOUT_ABOVE_POLICY`, `DAILY_CAP`, `TOO_MANY_OPEN_JOBS`, `ACTION_NOT_ALLOWED`) |
+| 404 | `UNKNOWN_ROBOT` / `UNKNOWN_WORKER` / `UNKNOWN_JOB` / `NOT_FOUND` | as named (`UNKNOWN_WORKER` only on `POST /jobs/:id/claim`) |
+| 409 | `REFUSED` | DEPLOYER below its floor |
+| 422 | `REVERTED` | MonaidCore said no (`code` = contract error, `link` if on-chain) |
+| 503 | `KILL_SWITCH` | kill switch engaged: nothing is sent |
+| 500 | `INTERNAL` | anything else (both RPCs down, …) |
 
----
+## `POST /events` — one device event from the bridge
 
-## `POST /muse/decide` — Muse, the owner's decision agent
+Exactly what the bridge posts:
+```json
+{ "robotId": 2, "kind": "crash", "seq": 71, "ts": 1793782787, "data": { "sim": true } }
+```
+- `seq`: per boot (resets on reboot); the bridge sends `0` for broker `up`/`down`. **Exact repeats** (same robot, kind,
+  seq and data within 60 s — QoS 1 redelivery) are dropped: `200 {"action":"ignored","note":"duplicate …"}`.
+- `ts`: integer unix seconds. `data`: object, untrusted input (only the fields below are read).
+- **Every kind below returns 200**; ones with nothing to do return `"action": "ignored"` with a `note`.
 
-Muse **decides; it never sends transactions.** It reads the decision (options we build or you send) plus the
-owner's context (`agents/owner-context.json`: calendar, preferences) and asks Claude (`claude-opus-5-5`, effort
-`low`) to pick **exactly one option id** with a one-line reason, as schema-checked JSON. If the answer is invalid or
-empty, slower than **8 s**, refused, or there's no API key, Muse **falls back to "owner decides"**. Whatever Muse picks
-is then applied by the normal code path, so every guardrail, the kill switch and the on-chain caps still apply.
+| `kind` | Agent action (Down module) | `action` |
+|---|---|---|
+| `crash` (Watcher long-press) or `down` (broker LWT: power cut) | Trouble: if the robot has no open/claimed job, post a **0.01 MON** job, claim window **60 s** (`data.level: "urgent"` → 0.03 MON, which waits for the owner). Otherwise ignored. | `job_posted` / `pending_approval` / `ignored` |
+| `claim` (T-Deck, `data.text` = worker ID; `data.worker` also accepted) or `click` (Watcher → `DEMO-1`) | Claims the **oldest open job on any robot** for that worker. Unknown worker → ignored + `UNKNOWN WORKER` on that device. | `claim_accepted` / `ignored` |
+| `recover`, `power` with `data.on: true`, `power_on` | **Proof** for a claimed `crash` job on that robot → settle, worker paid. | `job_settled` / `ignored` |
+| `heartbeat`, `up`, `power` (on), `power_on` | **Proof** for a claimed `down` job on that robot (first heartbeat after the device comes back). A heartbeat is *not* a proof for a `crash` job (the device never went offline). | `job_settled` / `ignored` |
+| `knob`, `power` (off), `power_off`, `beacon_seen`, `key` | Logged; no action. | `ignored` |
 
-### Approval mode — `{ "approvalId": "…" }`
-
-For an urgent job waiting for the owner. Muse chooses `approve` or `reject`; we apply it like `POST /owner/decide`.
+No proof within the 60 s window → the agent **expires** the job (escrow back to the robot) → screens show `BLOCKED`.
 
 ```sh
-curl -s -X POST $API/muse/decide -H "X-Monaid-Token: $TOKEN" -H "content-type: application/json" \
-  -d '{"approvalId":"7ec59435"}'
+curl -s -X POST $API/events -H "x-monaid-token: $TOKEN" -H "content-type: application/json" \
+  -d '{"robotId":2,"kind":"crash","seq":71,"ts":1793782787,"data":{"sim":true}}'
 ```
-Muse decided and it was applied (shape exact; values illustrative until a live run with an API key):
 ```json
-{ "ok": true, "mode": "approval", "approvalId": "7ec59435",
-  "muse": { "source": "muse", "choice": "approve", "reason": "Robot 1 runs the 15:00 demo; 0.03 MON protects it.", "ms": 2400, "model": "claude-opus-5-5" },
-  "applied": { "ok": true, "approvalId": "7ec59435", "decision": "approve", "jobId": "10",
-               "tx": { "hash": "0x…", "link": "https://testnet.monadscan.com/tx/0x…" } } }
+{ "ok": true, "robotId": "watcher-01", "seq": 71, "action": "job_posted", "jobId": "19", "payout": "0.01",
+  "tx": { "hash": "0x…", "link": "https://testnet.monadscan.com/tx/0x…" } }
 ```
-Muse fell back (real response, no API key configured):
+```sh
+curl -s -X POST $API/events -H "x-monaid-token: $TOKEN" -H "content-type: application/json" \
+  -d '{"robotId":1,"kind":"claim","seq":44,"ts":1793782790,"data":{"text":"RAJ-7"}}'
+```
 ```json
-{ "ok": true, "mode": "approval", "approvalId": "7ec59435",
-  "muse": { "source": "owner_decides", "fallback": "no_api_key", "detail": "ANTHROPIC_API_KEY not set in agents/.env", "ms": 1 },
-  "applied": null, "note": "Muse fell back: the approval stays pending — owner decides (POST /owner/decide)" }
+{ "ok": true, "robotId": "tdeck-01", "seq": 44, "action": "claim_accepted", "jobId": "19", "worker": "raj-7",
+  "tx": { "hash": "0x…", "link": "…" }, "note": "claimed robot watcher-01's job" }
 ```
-Muse's pick blocked by a guardrail (e.g. the daily cap was hit meanwhile): `"applied": { "ok": false, "error": "PolicyBlockedError", "message": "Blocked (DAILY_CAP): …" }`.
-`fallback` is one of `no_api_key`, `timeout`, `invalid_output`, `refusal`, `api_error`.
-Unknown approval → `404 NOT_FOUND`; already decided → `409 BAD_REQUEST`.
+```sh
+curl -s -X POST $API/events -H "x-monaid-token: $TOKEN" -H "content-type: application/json" \
+  -d '{"robotId":2,"kind":"recover","seq":72,"ts":1793782800,"data":{"sim":true}}'
+```
+```json
+{ "ok": true, "robotId": "watcher-01", "seq": 72, "action": "job_settled", "jobId": "19", "worker": "demo-1", "payout": "0.01",
+  "tx": { "hash": "0x…", "link": "…" } }
+```
+Ignored examples: `{"ok":true,"robotId":"tdeck-01","seq":12,"action":"ignored","note":"heartbeat: nothing to do"}`,
+`{"ok":true,"robotId":"tdeck-01","seq":45,"action":"ignored","note":"unknown worker \"MALLORY\""}`.
 
-### Advice mode — `{ "question": "…", "options": [ … ] }`
+## `GET /feed` — Server-Sent Events (screens + portal)
 
-Muse only answers; **nothing is applied** — you act on the choice (e.g. which robot's screen shows first).
-2–8 options; `id` lowercase `a-z0-9_-` (max 32), `label` max 200 chars, optional `detail` max 300, `question` max 300.
+`curl -N -H "x-monaid-token: $TOKEN" $API/feed`. One JSON object per `data:` line; `: ping` comments every 15 s.
+
+**Screen lines, in the bridge's format, sent to BOTH devices** for every job change:
+```
+data: {"type":"screen","robot":"watcher-01","robotId":1,"screen":{"state":"JOB OPEN"}}
+data: {"type":"screen","robot":"watcher-01","robotId":2,"screen":{"state":"JOB OPEN"}}
+data: {"type":"screen","robot":"watcher-01","robotId":1,"screen":{"cmd":"job","id":19,"payout":"0.01 MON","worker":""}}
+data: {"type":"screen","robot":"watcher-01","robotId":1,"screen":{"state":"CLAIMED"}}
+data: {"type":"screen","robot":"watcher-01","robotId":1,"screen":{"cmd":"job","id":19,"payout":"0.01 MON","worker":"DEMO-1"}}
+data: {"type":"screen","robot":"watcher-01","robotId":1,"screen":{"state":"PAID"}}
+data: {"type":"screen","robot":"watcher-01","robotId":1,"screen":{"say":"paid 0.01 MON to DEMO-1"}}
+data: {"type":"screen","robot":"watcher-01","robotId":2,"screen":{"state":"BLOCKED"}}
+data: {"type":"screen","robot":"watcher-01","robotId":2,"screen":{"say":"no fix in time"}}
+data: {"type":"screen","robot":"tdeck-01","robotId":1,"screen":{"say":"UNKNOWN WORKER"}}
+```
+`robotId` is the bridge number; `robot` is the robot the job belongs to. States: `JOB OPEN`, `BIDDING` (waiting for the
+owner), `CLAIMED`, `PAID`, `BLOCKED`, `IDLE` (cancelled). The job card's `worker` shows the worker's wallet as its registry
+ID. Today's bridge forwards `screen.state` and `screen.say`; the job card needs a `cmd:"job"` branch in the bridge.
+
+Other feed lines (for the portal): `event`, `job_posted`, `job_claimed`, `job_settled`, `job_expired`, `job_cancelled`,
+`approval_requested`, `approval_decided`, `agent_decision` (with `by` and the agent's `reason`), `blocked`, `kill_switch`, `tx` (every transaction attempt
+with `result` and explorer `link`). Job lines carry `robot` (our id) and `jobId`.
+
+## `POST /jobs/:id/claim` — portal claim
 
 ```sh
-curl -s -X POST $API/muse/decide -H "X-Monaid-Token: $TOKEN" -H "content-type: application/json" \
-  -d '{"question":"Which robot gets help first?","options":[{"id":"robot-1","label":"T-Deck: crashed, demo at 15:00"},{"id":"robot-2","label":"Watcher: crashed, patrol at 16:30"}]}'
+curl -s -X POST $API/jobs/19/claim -H "x-monaid-token: $TOKEN" -H "content-type: application/json" -d '{"worker":"demo-2"}'
 ```
-Shape exact; values illustrative:
-```json
-{ "ok": true, "mode": "advice",
-  "muse": { "source": "muse", "choice": "robot-1", "reason": "The 15:00 demo depends on the T-Deck.", "ms": 2100, "model": "claude-opus-5-5" } }
-```
-Bad input → `400 BAD_REQUEST` (`"muse decision: options: 2–8 items"`).
+`{ "ok": true, "jobId": "19", "robotId": "watcher-01", "worker": "demo-2", "workerAddress": "0x3D81…4DD8", "claimDeadline": 1793782850, "tx": {…} }`
+Worker IDs are case-insensitive (`DEMO-2` = `demo-2`); unknown → `404 UNKNOWN_WORKER`.
 
-Every answer or fallback is also on the feed as `muse_decision` (with Muse's `reason`), so screens can show it.
+## Owner decisions
 
-### WhatsApp transport (teammate's side) — exact contract
+An urgent job (0.03 MON, above the 0.02 MON owner-approval threshold) waits as `pending_approval` (feed `approval_requested`).
 
-The WhatsApp transport is yours; we only expose the endpoints above. The flow:
+- **`POST /owner/decide`** `{"approvalId":"…","decision":"approve"|"reject"}` — the portal's "owner decides" button, any time.
+  → `{ "ok": true, "approvalId": "…", "decision": "approve", "jobId": "…", "tx": {…} }`
+- **`POST /agent/decide`** (alias `/muse/decide`) — the **decision agent** decides: a model via OpenRouter
+  (`anthropic/claude-haiku-5.5`, set in `agents/config.json` → `muse.model`). Its `by` label is **"Claude"** for a Claude
+  model, otherwise **"AI agent"**. It only chooses, never sends a transaction; its pick then goes through every guardrail:
+  - `{"approvalId":"…"}` → Claude picks approve/reject and we apply it:
+    `{ "ok": true, "mode": "approval", "approvalId": "…", "agent": { "source": "agent", "by": "Claude", "choice": "approve", "reason": "…", "ms": 2100, "model": "anthropic/claude-haiku-5.5" }, "applied": { "ok": true, … } }`
+  - `{"question":"…","options":[{"id":"robot-1","label":"…"},…]}` (2–8 options) → answer only: `{ "ok": true, "mode": "advice", "agent": {…} }`
+  - If the agent is unavailable, slow (> 8 s), refuses, or answers invalidly (anything but one of the option ids as JSON): `"agent": { "source": "owner_decides", "by": "Claude", "fallback": "no_api_key" | "timeout" | "invalid_output" | "refusal" | "api_error", "detail": "…", "ms": 1 }`, `"applied": null` — the approval stays pending for `POST /owner/decide`.
+- `GET /approvals[?status=pending]` → `{ "ok": true, "approvals": [ { "id", "robot", "action", "summary", "reason", "createdAt", "status" } ] }`
 
-1. Watch `GET /feed` for `approval_requested`. Send the owner a WhatsApp message with
-   `approval.summary` (e.g. "postJob 0.03 MON, claim window 60 s"), the robot, and a link the owner can forward to Muse.
-2. When the owner forwards it to Muse, call **`POST /muse/decide` with `{"approvalId": approval.id}`** — only the id.
-   Never put text from WhatsApp messages into the request: Muse only sees options we build.
-3. Reply to the owner with `muse.reason` and the outcome:
-   - `muse.source == "muse"` and `applied.ok` → "Muse approved/rejected: <reason>" (+ `applied.tx.link` if approved).
-   - `muse.source == "muse"` and `applied.ok == false` → "Muse chose <choice> but it was blocked: <applied.message>".
-   - `muse.source == "owner_decides"` → "Muse couldn't decide (<fallback>). Your call:" and offer approve / reject,
-     which you send as **`POST /owner/decide`** `{"approvalId": "…", "decision": "approve" | "reject"}`.
-4. The portal's **"owner decides"** button calls `POST /owner/decide` directly, any time — it does not wait for Muse.
+## Admin and reads
 
----
+- `POST /admin/kill` `{"engaged":true,"reason":"…"}` / `{"engaged":false}` → `{ "ok": true, "engaged": …, "reason": …, "since": … }`. While engaged, anything that would send a transaction returns `503 KILL_SWITCH`.
+- `POST /admin/reset-seq` `{}` (or `{"robotId":…}`) → clears the duplicate cache: `{ "ok": true, "reset": ["tdeck-01","watcher-01"] }`.
+- `GET /robots` → `{ "ok": true, "core": "0x3DbE…3867", "killSwitch": {…}, "robots": [ { "robotId": "tdeck-01", "robotAddress", "agent", "agentAddress", "agentBalance", "balance", "escrow", "openJobs", "spentToday", "lastSeq", "lastEventAt" } ] }`
+- `GET /jobs[?robotId=2]` → newest first: `{ "ok": true, "jobs": [ { "jobId", "robotId", "status", "payout", "claimWindow", "worker", "workerAddress", "claimDeadline", "postedAt", "txs": [ { "action", "hash", "link" } ] } ] }`
+- `GET /workers` → `{ "ok": true, "workers": [ { "id": "demo-1", "address": "0x3D81…4DD8" }, … ] }`
+- `GET /health` (no token) → `{ "ok": true, "service": "monaid-agents", "version": 1 }`
 
 ## Running it (owner)
 
 ```sh
 cd agents
-npm run api:token        # once: MONAID_API_TOKEN into agents/.env (not printed)
-npm run api              # host/port from agents/config.json → api; or MONAID_API_HOST=0.0.0.0 npm run api
-npm run mock:bridge      # plays the bridge: rejections, happy path, fail path (waits ~60 s), then resets seq
-npm run mock:bridge -- happy --approval   # happy path with the owner-approval beat
-npm run mock:bridge -- happy --muse       # same, but Muse decides first (owner decides on fallback)
-npm run check:muse                        # one real Muse decision (needs ANTHROPIC_API_KEY in agents/.env)
+npm run api              # port 4000 (agents/config.json → api)
+npm run reset:demo       # close jobs, robots to 0.5 MON, agents above floor, kill switch off, balances + links
+npm run preflight        # RPC, wallets/floors, robots, contract = shared/, API on 4000, token, kill switch
+npm run mock:bridge      # plays the bridge exactly: all kinds, happy path, fail path (~85 s)
+npm run check:agent-decision   # one real decision via OpenRouter (needs OPENROUTER_API_KEY in agents/.env)
 ```
