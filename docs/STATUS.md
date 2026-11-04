@@ -1,6 +1,6 @@
 # Monaid — Status
 
-_Last updated: 2026-11-04, end of P3; next P4._
+_Last updated: 2026-11-04, end of P4; next P5._
 
 **My scope:** `contracts/`, `agents/`, `shared/`, `docs/` only — wallets, funding, transactions, robot agents,
 Muse logic, guardrails, and an API for teammates. Firmware, broker, MQTT bridge, screens, portal UI and
@@ -10,120 +10,126 @@ WhatsApp transport belong to teammates.
 
 | Step | Title | Status |
 |---|---|---|
-| P0 | Stop and re-scope | done (new CLAUDE.md committed) |
-| P1 | Finish the payment contract (MonaidCore v0) | done and merged (PR #1, leftovers in PR #2) |
+| P0 | Stop and re-scope | done |
+| P1 | Finish the payment contract (MonaidCore v0) | done and merged (PR #1, #2) |
 | P2 | Wallet manager and funding | done and merged (PR #2) |
 | P3 | Transaction sender | done and merged (PR #3) |
-| P4 | Jobs in the contract (MonaidCore v1) | **next** — branch `step4/jobs` |
-| P5 | Robot agents and off-chain guardrails | — |
+| P4 | Jobs in the contract (MonaidCore v1.1) + sendTx latency pass | **done** — branch `step4/jobs` (PR "P4 jobs + latency pass") |
+| P5 | Robot agents and off-chain guardrails | **next** |
 | P6 | Agents API for teammates | — |
 | P7 | Muse (decision logic only) | — |
 | P8 | Module contract (Charger / Lost / Down, team picks) | — |
 | P9 | Demo hardening | — |
 
+### Pending
+
+- **Hotspot timing of a full settle (5 before / 5 after) — skipped for now, pending.** Run on the phone hotspot:
+  `MONAID_TX_LEGACY=1 npm run time:settle` (before) and `npm run time:settle` (after) in `agents/`. ~0.37 MON of AGENT_1 gas.
+  Indicative only (venue Wi-Fi, current path before fixed gas, 3 runs): settle 975 / 1417 / 1468 ms.
+
 ## Broker — handed to teammate
 
-The broker belongs to a teammate. The local `broker/` folder (Mosquitto config, ACL, credentials/run scripts,
-ACL test — never run, never committed) is kept as-is and excluded locally via `.git/info/exclude`.
-Mosquitto 2.1.2 is installed on the laptop (winget); its Windows service runs on `localhost:1883`. Not touched further.
+Local `broker/` kept as-is, excluded via `.git/info/exclude`. Mosquitto 2.1.2 installed on the laptop; service untouched.
 
 ## Deployed (Monad testnet, chain 10143)
 
 | Contract | Address | Notes |
 |---|---|---|
-| MonaidCore v0 | `0xDD22ee7923195EbBcC247d40553BCB138A6D5BBf` | [verified on MonadVision](https://testnet.monadvision.com/contracts/full_match/10143/0xDD22ee7923195EbBcC247d40553BCB138A6D5BBf/) · deploy tx [0x51f331c8…](https://testnet.monadscan.com/tx/0x51f331c895125db91a67994d4e23459c9655585ca64cd6d05906f7a645a771b0) · block 76858867 |
+| **MonaidCore v1.1** (current) | `0x3DbE227ad91Cc3bfa14468196F413173dF893867` | [verified on MonadVision](https://testnet.monadvision.com/contracts/full_match/10143/0x3DbE227ad91Cc3bfa14468196F413173dF893867/) · deploy tx [0xcc5c76c5…](https://testnet.monadscan.com/tx/0xcc5c76c55a923615285d22bad1a4f8da43f356cfcb1ca02f0ab2a22a1572f1b6) · block 76879068 · maxPayout 0.1 MON |
+| MonaidCore v1 (retired) | `0xb95e667d8DA354a0517553926D39Af148543Ce98` | balances recovered; its maxPayout was raised to 0.5 MON for the recovery |
+| MonaidCore v0 (retired) | `0xDD22ee7923195EbBcC247d40553BCB138A6D5BBf` | balances recovered |
 
-Machine-readable: `shared/addresses.json` (contract, wallets, robots) and `shared/abi/MonaidCore.json`.
+Machine-readable: `shared/addresses.json` (current + `history`) and `shared/abi/MonaidCore.json`.
+
+### MonaidCore v1.1 rules
+
+- `postJob(robot, payout, claimWindow)` — robot's agent only; `payout ≤ maxPayout`; payout escrowed from the robot's balance.
+- `claim(jobId, worker)` — robot's agent only (the bridge/portal reports claims to our API); claim valid for `claimWindow` seconds.
+- `settle(jobId)` — robot's agent only; pays the worker; reverts `JobNotClaimed` / `ClaimExpired` / `AlreadySettled`.
+- `expire(jobId)` — **anyone**, after the window; escrow back to the robot. **Works while paused.**
+- `cancel(jobId)` — robot's agent, unclaimed jobs only; escrow back. **Works while paused.**
+- `pay(robot, to, amount)` — direct agent payment, capped by `maxPayout`.
+- `pause()` blocks `fund`, `pay`, `postJob`, `claim`, `settle`. `setMaxPayout` owner only.
+- Errors: `NotOwner`, `NotRobotAgent`, `RobotNotRegistered`, `RobotAlreadyRegistered`, `ZeroAddress`, `ZeroAmount`, `ZeroWindow`,
+  `InsufficientBalance`, `PayoutTooHigh`, `Paused`, `TransferFailed`, `UseFund`, `JobNotFound`, `JobNotOpen`, `JobNotClaimed`,
+  `ClaimExpired`, `ClaimNotExpired`, `AlreadySettled`. 12 contract tests.
 
 ## Wallets
 
-All keys live in `agents/.env` (git-ignored); `contracts/` reads from it. `contracts/.env` no longer exists.
-Funding rules (`agents/config.json`): DEPLOYER hard floor **12 MON** (every DEPLOYER value send checks it first and
-refuses with what is still spendable); agent gas floor **1 MON**, top-up target **3 MON**, top-ups capped at
-**10 MON per UTC day** (ledger `agents/logs/topups.jsonl`).
+All keys in `agents/.env` (git-ignored); `contracts/` reads from it. Funding rules (`agents/config.json`): DEPLOYER hard floor
+**12 MON**; agent gas floor **1 MON**, top-up target **3 MON**, top-ups capped at **10 MON per UTC day**.
 
-| Name | Address | Role | Balance (after P3 merge) | Spendable (balance − floor) |
+| Name | Address | Role | Balance (end of P4) | Spendable |
 |---|---|---|---|---|
-| DEPLOYER | `0x639B5bE0679EC82C7224F31d04bb3dD093222d5D` | owner / funder | 25.8766 MON | 13.8766 MON |
-| AGENT_1 | `0x31443AB8d8F13E16b86bfcDB4b965320E560824A` | agent, robot 1 | 4.7659 MON | 3.7659 MON |
-| AGENT_2 | `0x16Cd0840ba8d68B526D5F5D9EB72626bB7A1CA45` | agent, robot 2 | 3.0000 MON | 2.0000 MON |
+| DEPLOYER | `0x639B5bE0679EC82C7224F31d04bb3dD093222d5D` | owner / funder | 25.5257 MON | 13.5257 MON |
+| AGENT_1 | `0x31443AB8d8F13E16b86bfcDB4b965320E560824A` | agent, robot 1 | 4.5708 MON | 3.5708 MON |
+| AGENT_2 | `0x16Cd0840ba8d68B526D5F5D9EB72626bB7A1CA45` | agent, robot 2 | 2.9831 MON | 1.9831 MON |
 
-### Robots (registered in MonaidCore v0)
-
-| Robot | Robot address (derived from id, no key) | Agent | Balance in core |
+| Robot | Robot address (derived from id, no key) | Agent | Balance in v1.1 |
 |---|---|---|---|
-| 1 | `0xB46d4FeCEFd31C1531FA84Dd61228b9Ea5107077` | AGENT_1 | 0.48 MON |
+| 1 | `0xB46d4FeCEFd31C1531FA84Dd61228b9Ea5107077` | AGENT_1 | 0.5 MON |
 | 2 | `0xE1f9bf1554a484d8993bF19e4cF02B79e4ccF254` | AGENT_2 | 0.5 MON |
 
-Old v0 demo-only addresses (no keys): robot `0x478962782092A83697F4d5BC9c44bc1e5Ba572a6` (AGENT_1, 0.005 MON in core),
-technician `0x9A5E9183193DA5978efc86e537604f1f787456D7`.
+## sendTx (`agents/src/tx.ts`)
 
-### P2 transactions
+DEPLOYER floor check → gas (fixed per action, or estimate +15%; estimation doubles as the revert pre-check) →
+sign with local nonce + cached fees → send → poll receipt every 300 ms. Per-wallet serial queue; network-error
+retries only; custom errors decoded; one audit line per attempt in `agents/logs/audit.jsonl`.
 
-| What | Tx | Fee MON |
-|---|---|---|
-| registerRobot 1 → AGENT_1 | [0x6d9a9cb1…](https://testnet.monadscan.com/tx/0x6d9a9cb11657f32d1387483dde048642cd6eb68cedd0423aa29b733fef9bc26f) | 0.0062 |
-| registerRobot 2 → AGENT_2 | [0xa884ab5e…](https://testnet.monadscan.com/tx/0xa884ab5e99465779a905467042b8afe27b407df01c735de556f5f5383edfd7a9) | 0.0062 |
-| top up AGENT_2, 3 MON | [0x6780b760…](https://testnet.monadscan.com/tx/0x6780b7601e1a7a9e7a282ce9fe72054d92e22565091131e64159cd0ab6fede12) | 0.0025 |
-| fund robot 1, 0.5 MON | [0x20b6784e…](https://testnet.monadscan.com/tx/0x20b6784e2adf9ae8913b542f716548f1b8a3f980ec0019aa7b2583b657250af1) | 0.0081 |
-| fund robot 2, 0.5 MON | [0xc1debb4b…](https://testnet.monadscan.com/tx/0xc1debb4bd92c56c0b8664014cf218db95bdfff61deb0fbdda00ad12ea68e960d) | 0.0081 |
+- **Fee cache:** refreshed in the background every 3 s (`tx.feeRefreshMs`).
+- **Fixed gas** (`tx.fixedGas`, measured via `eth_estimateGas` on v1, +5%): postJob 174,700 (max seen 166,377 on a
+  contract's first job), claim 55,900 (53,165), settle 114,100 (108,634, paying a fresh worker address).
+  Fixed-gas actions still simulate first, **with the fixed limit**, so bad calls are refused locally (your choice).
+- **Out-of-gas fallback:** a too-small fixed limit is logged (`result: "out-of-gas"`) and retried once with estimation.
+  Proven live (`npm run check:oog`): caught at preflight with nothing sent; and, with preflight off, failed on-chain
+  ([0xa77108b0…](https://testnet.monadscan.com/tx/0xa77108b04f9b7639213417382be23369ab95c960889191d229145f13234ee058),
+  0.00612 MON) then succeeded on the retry.
+- `MONAID_TX_LEGACY=1` reproduces the pre-latency-pass path for timing comparisons.
 
-### P3 — sendTx (`agents/src/tx.ts`)
+### Earlier timings (venue Wi-Fi)
 
-One path for every tx: DEPLOYER floor check → simulate → estimate +15% → sign with local nonce → send → receipt.
-Per-wallet serial queue; network-error retries only (same signed tx); custom errors decoded; audit log in
-`agents/logs/audit.jsonl` (git-ignored). Funding commands and `demo:pay` (moved from contracts/ to agents/) use it.
-
-**Nonce proof** (`npm run proof:sendtx`): 5 concurrent `pay` calls from AGENT_1 → nonces 2,3,4,5,6, all success,
-chain order = nonce order, no nonce errors, ~1.9 s per tx (serial: each waits for its receipt).
-[#1](https://testnet.monadscan.com/tx/0xee66f2cc67576f6fa56084ff2a7c476e8d310057622372dcf77e0127821992fb) ·
-[#2](https://testnet.monadscan.com/tx/0x96f32c5ebcb9ccdbf47fcaaf055df9b321b16454f93448bce8f497007725602d) ·
-[#3](https://testnet.monadscan.com/tx/0xd25f152d99a4be462f9b6fa3c66146431b534dd3b8b8b12464c2611208aae4c9) ·
-[#4](https://testnet.monadscan.com/tx/0x71b7dd505e9aa8fc386e99499bcabc1031b84046ed1b757e88a681f7ba39120b) ·
-[#5](https://testnet.monadscan.com/tx/0x18f7d9bb6fed2ee987d08736cbec699e2d10384c0e4a9653a0b4a08b00f8fc44).
-Overspend caught at simulate: `InsufficientBalance(495000000000000000, 1000000000000000000000)`, not sent, 0 gas.
-
-`demo:pay` via sendTx: [fund 0.01](https://testnet.monadscan.com/tx/0xbc60189a0071db36585cb444d729df3528e9ac6764977daa244157e5b0f065c6) ·
-[pay 0.005](https://testnet.monadscan.com/tx/0x5815c1e01eb44c9318a263629b0aab3206f449c5d6417b28894839cf5f54d641).
-Floor refusals (fund robot 2 with 50 and 14 MON) logged as `refused`, nothing sent.
-
-**Receipt wait** (`npm run time:pay`, 5 sequential `pay()` calls, send accepted → receipt seen):
-
-| Setting | min | avg | max |
+| Receipt wait, 5 sequential `pay()` (send → receipt) | min | avg | max |
 |---|---|---|---|
 | viem default (`waitForTransactionReceipt`, 4000 ms poll) | 538 ms | 693 ms | 954 ms |
 | viem client `pollingInterval: 300` | 764 ms | 1159 ms | 1391 ms |
-| **direct `eth_getTransactionReceipt` poll every 300 ms (kept)** | **188 ms** | **556 ms** | **775 ms** |
+| **direct receipt poll every 300 ms (kept)** | **188 ms** | **556 ms** | **775 ms** |
 
-viem's wait checks once immediately, then only after a new block number, so lowering its interval didn't help;
-polling the receipt directly does, and caps a missed first check at ~300 ms instead of ~4 s. Set in
-`agents/config.json` → `network.receiptPollingMs`. The queue still waits for each receipt. End-to-end per tx
-(simulate + estimate + fees + send + receipt) is ~2–3 s and dominated by RPC round-trips, not the receipt wait.
+Nonce proof (`npm run proof:sendtx`): 5 concurrent pays from one agent → consecutive nonces, chain order = nonce order.
 
 ## Findings
 
-- **Reserve balance — TESTED: gas-only wallets CAN sit below 10 MON.** AGENT_1 at 4.9872 MON sent a 0-value
-  self-tx ([0x49cfba7a…](https://testnet.monadscan.com/tx/0x49cfba7a8c66bd4a150f5de63583351cf45056453f046771a0b1e9da9fe0a580)):
-  success, gas limit 24,150 (21,000 + 15%) at 103 gwei = 0.0024875 MON; balance 4.9872 → 4.9847 MON.
-  Its earlier `pay` call at 5 MON also succeeded. The reserve rule only restricts **value** sent out of a wallet.
-  **Rule for agents:** agent wallets only pay gas, so they may sit below 10 MON; gas floor 1 MON.
-  Wallets that send value (DEPLOYER via `fund`/top-ups) must stay ≥ 12 MON.
-- **Gas limit = gas charged.** Monad receipts report `gasUsed` equal to the limit. Scripts estimate +15%.
-  Typical fees at ~102–115 gwei: deploy ≈ 0.052 MON, `registerRobot` ≈ 0.006, `fund` ≈ 0.008, `pay` ≈ 0.013,
-  plain transfer ≈ 0.0025.
-- Ignition deploys use the raw estimate as the limit (no margin); fine so far.
+- **Reserve balance — gas-only wallets CAN sit below 10 MON** (AGENT_1 self-tx at 4.99 MON succeeded,
+  [0x49cfba7a…](https://testnet.monadscan.com/tx/0x49cfba7a8c66bd4a150f5de63583351cf45056453f046771a0b1e9da9fe0a580)).
+  Only value sends are restricted. Agent gas floor 1 MON; DEPLOYER ≥ 12 MON.
+- **Gas limit = gas charged**, and Monad receipts report `gasUsed` = the limit, so real usage must come from `eth_estimateGas`.
+- Fees at ~102 gwei: deploy v1.1 ≈ 0.137 MON, `registerRobot` ≈ 0.0062, `fund` ≈ 0.0081, `pay` ≈ 0.0084, transfer ≈ 0.0025.
+
+## P4 transactions
+
+| What | Tx |
+|---|---|
+| v0 → DEPLOYER recovery (robot 1, 2, P1 demo robot) | [0xccaea64a…](https://testnet.monadscan.com/tx/0xccaea64a32b5b0959f478e1c226dcd4e404b9b0cf767ec20e75fb06acebdc297) · [0xaa36c0f6…](https://testnet.monadscan.com/tx/0xaa36c0f662182c4a2189a0ecf073fc8237379929d30cb76d0e0d3be003b8f3e2) · [0x9d77737e…](https://testnet.monadscan.com/tx/0x9d77737e42e5db8684b0fd665a554dca91f66d248e2ed3441f534b52eae87025) |
+| Deploy v1 | [0x2535b067…](https://testnet.monadscan.com/tx/0x2535b067ade056ec0c196005359e04967b4699c1cf23917dddb52eb12808ea5c) |
+| v1 register 1, 2 · fund 1, 2 | [0x321a5500…](https://testnet.monadscan.com/tx/0x321a55003aa848f5016059e18c86edd9fad056a04342405e9aef44d250441084) · [0x7cf068ad…](https://testnet.monadscan.com/tx/0x7cf068ad6c2718f33477151fad7ac5776009c5e7c4fc4ebea38dbfb0da174ad2) · [0x86936906…](https://testnet.monadscan.com/tx/0x86936906fce322bfc233386440838dd3d4d6f0e5dc3451c5cb4746d650bf4dfb) · [0xa969a7ef…](https://testnet.monadscan.com/tx/0xa969a7ef4631be2ab91915ac4e3a951ec6e333d37932d1db2998e4416b4f21ce) |
+| Gas measurement: 3 × postJob/claim/settle on v1 | settles [run 1](https://testnet.monadscan.com/tx/0x7af374e2ab25d10b5925231bd76db10c9ea1d86637a0452a6cff41bc6f60e8d6) · [run 2](https://testnet.monadscan.com/tx/0x7b2df763c93310b7089e713d792cc6cd305a7df2d008508514ecc5273d0fb276) · [run 3](https://testnet.monadscan.com/tx/0xdbdcdf96ba392a50c9a55ac3c57b9a876f917a233667e8c9658a08f746be1ea2) |
+| v1 → DEPLOYER recovery (setMaxPayout 0.5, robot 1, robot 2) | [0x0ae231f6…](https://testnet.monadscan.com/tx/0x0ae231f6556e747b1b17d1a31a8bfb1d11313f1d0e9cc2044be31e9316aa2aba) · [0x52006024…](https://testnet.monadscan.com/tx/0x52006024f822a051aea5efd297680d0f59d854a92d54b47514a41dc912226556) · [0xe433c7bb…](https://testnet.monadscan.com/tx/0xe433c7bbc9395f132490976e5c3c73e2feb735d1b750296ea9a5e9cee9512cb5) |
+| Deploy v1.1 | [0xcc5c76c5…](https://testnet.monadscan.com/tx/0xcc5c76c55a923615285d22bad1a4f8da43f356cfcb1ca02f0ab2a22a1572f1b6) |
+| v1.1 register 1, 2 · fund 1, 2 | [0xb06b1eb0…](https://testnet.monadscan.com/tx/0xb06b1eb0a09756c3f58859f50ce63039f697377517157dc3ae61cc86227027d2) · [0x716c8889…](https://testnet.monadscan.com/tx/0x716c8889eebca00d1b02d35a5c4c8c8d12e6aa73beb4f21dc4bea7ff8b67c01c) · [0x2e48f93d…](https://testnet.monadscan.com/tx/0x2e48f93d1866a1703f74de2ebffcd1a83e6b1c61695c14f2fba36ccd8ef6ecf7) · [0xa27ad4be…](https://testnet.monadscan.com/tx/0xa27ad4be52670b614e57c9c5af44846a2e482fd20a127ef33104fe1d14c06392) |
+| check:oog (postJob ×2 after fallback, 1 failed on-chain attempt, cancel ×2) | [0x0946a9c5…](https://testnet.monadscan.com/tx/0x0946a9c5a8650b094c3498c7336477ecb058bb6e3dc2be350301c41215d8e7e6) · [0xa77108b0…](https://testnet.monadscan.com/tx/0xa77108b04f9b7639213417382be23369ab95c960889191d229145f13234ee058) · [0xdaacb031…](https://testnet.monadscan.com/tx/0xdaacb0313b26a126b20112429080b63aa2404392383d1fa3aab950652348b860) |
 
 ## MON spent
 
 | Step | Spent |
 |---|---|
-| P1 | ≈ 0.079 MON gas + 0.01 MON sent into MonaidCore |
-| P1 leftovers | 0.0024875 MON (AGENT_1 self-tx) |
-| P2 | 0.0311 MON gas; moved 3 MON DEPLOYER → AGENT_2 and 1 MON into MonaidCore (robots 1, 2). You added 15 MON to DEPLOYER by hand. |
-| P3 | 0.0564 MON gas (AGENT_1 0.0505, DEPLOYER 0.0060); 0.01 MON into robot 1, 0.01 MON paid out to the demo technician |
-| P3 timing tweak | 0.1683 MON gas (AGENT_1: 4 batches × 5 pays — 3 timing runs + 1 proof rerun); 0.02 MON paid out from robot 1 to the demo technician |
+| P1 | ≈ 0.079 MON gas + 0.01 MON into MonaidCore v0 |
+| P1 leftovers | 0.0025 MON |
+| P2 | 0.0311 MON gas; 3 MON DEPLOYER → AGENT_2, 1 MON into v0. You added 15 MON to DEPLOYER. |
+| P3 | 0.0564 MON gas |
+| P3 timing tweak | 0.1683 MON gas |
+| P4 | ≈ 0.53 MON gas in total (two deploys ≈ 0.275, recoveries ≈ 0.046, registers/funds ≈ 0.041, gas measurement 0.111, check:oog ≈ 0.059). 1.985 MON recovered from v0/v1; 1 MON now in v1.1. |
 
 ## Open items
 
-- MonaidCore v0 has no way to change a robot's agent after registration.
+- Hotspot settle timing (see Pending).
+- Robot ids may change to match teammates' MQTT usernames (`agents/config.json` → `robots`); re-register if they do.
 - Monadscan verification skipped (no `ETHERSCAN_API_KEY`); MonadVision is the verify target.
