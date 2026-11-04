@@ -45,7 +45,7 @@ export type EventResponse = {
 export type ClaimRequest = { worker: string }; // worker ID, e.g. "demo-1"
 export type ClaimResponse = { ok: true; jobId: string; robotId: string; worker: string; workerAddress: string; claimDeadline: number; tx: TxRef };
 
-/** POST /owner/decide — the owner's pick when Muse is slow (or the "owner decides" button). */
+/** POST /owner/decide — the owner's pick when Claude is slow (or the "owner decides" button). */
 export type DecideRequest = { approvalId: string; decision: "approve" | "reject" };
 export type DecideResponse = { ok: true; approvalId: string; decision: "approve" | "reject"; jobId?: string; tx?: TxRef };
 
@@ -133,25 +133,25 @@ export type FeedEvent = {
 
 // ---------------- Claude decisions (P7; route /agent/decide, alias /muse/decide) ----------------
 
-/** POST /agent/decide — approval mode: Muse picks approve/reject for a pending approval and we apply it. */
-export type MuseApprovalRequest = { approvalId: string };
-/** POST /agent/decide — advice mode: Muse picks one of the given options; nothing is applied. */
-export type MuseAdviceRequest = {
+/** POST /agent/decide — approval mode: Claude picks approve/reject for a pending approval and we apply it. */
+export type ClaudeApprovalRequest = { approvalId: string };
+/** POST /agent/decide — advice mode: Claude picks one of the given options; nothing is applied. */
+export type ClaudeAdviceRequest = {
   question: string; // max 300 chars
   options: { id: string; label: string; detail?: string }[]; // 2–8; id: lowercase a-z0-9_-, max 32
 };
 
-export type MuseResult =
+export type ClaudeDecision =
   | { source: "claude"; choice: string; reason: string; ms: number; model: string }
   | { source: "owner_decides"; fallback: "no_api_key" | "timeout" | "invalid_output" | "refusal" | "api_error"; detail: string; ms: number };
 
-export type MuseApprovalResponse = {
+export type ClaudeApprovalResponse = {
   ok: true;
   mode: "approval";
   approvalId: string;
-  claude: MuseResult;
-  /** null when Claude fell back (approval stays pending). Otherwise the result of applying Muse's pick. */
+  claude: ClaudeDecision;
+  /** null when Claude fell back (approval stays pending). Otherwise the result of applying Claude's pick. */
   applied: DecideResponse | { ok: false; error: string; message: string } | null;
   note?: string;
 };
-export type MuseAdviceResponse = { ok: true; mode: "advice"; claude: MuseResult };
+export type ClaudeAdviceResponse = { ok: true; mode: "advice"; claude: ClaudeDecision };
