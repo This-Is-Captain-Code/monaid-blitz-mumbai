@@ -11,6 +11,11 @@ import readline from "node:readline";
 const TDECK = "tdeck-01", WATCHER = "watcher-01";
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 
+if (!process.env.BROKER_URL) {
+  console.error("BROKER_URL not set — run from server/bridge or pass --env-file. Refusing to guess localhost.");
+  process.exit(1);
+}
+
 const c = mqtt.connect(process.env.BROKER_URL, {
   username: process.env.BRIDGE_USER, password: process.env.BRIDGE_PASS,
   clientId: "demo-" + Math.random().toString(16).slice(2, 8),
@@ -107,7 +112,7 @@ function homeBeacon(dev) {
 
 // ---- Event handling ----
 c.on("connect", () => {
-  log("demo driver connected");
+  log("demo driver connected to", process.env.BROKER_URL);
   c.subscribe(["monaid/+/evt", "monaid/+/status", "monaid/demo/ctl"], { qos: 1 });
   log("keys: c=charger  h=home  b=beacons(sim)  r=reset  q=quit  (wake arc = crash the watcher)");
 });
