@@ -118,6 +118,7 @@ void app_main(void) {
             ui_knob(k);
         }
 
+        static bool press_consumed = false;
         uint16_t pins;
         if (pca9535_get(&pins) == ESP_OK) {
             // Charger module proof: the instant USB power arrives, say so.
@@ -134,16 +135,20 @@ void app_main(void) {
                 }
                 last_vbus = vbus;
             }
+            // Long-press = crash (sticky). While crashed, any click = recover.
             bool pressed = (pins & EXP_KNOB_BTN) == 0;
             int64_t now_ms = esp_timer_get_time() / 1000;
-            if (pressed && press_start == 0) press_start = now_ms;
-            if (!pressed) {
-                if (press_start != 0 && !s_crashed && (now_ms - press_start) < LONGPRESS_MS)
-                    monaid_net_event("click", NULL);
-                press_start = 0;
-                if (s_crashed) set_crashed(false);
-            } else if (!s_crashed && (now_ms - press_start) >= LONGPRESS_MS) {
+            if (pressed && press_start == 0) { press_start = now_ms; press_consumed = false; }
+            if (pressed && !press_consumed && !s_crashed && (now_ms - press_start) >= LONGPRESS_MS) {
                 set_crashed(true);
+                press_consumed = true;
+            }
+            if (!pressed) {
+                if (press_start != 0 && !press_consumed) {
+                    if (s_crashed) set_crashed(false);
+                    else monaid_net_event("click", NULL);
+                }
+                press_start = 0;
             }
         }
 
