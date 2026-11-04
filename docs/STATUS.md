@@ -87,6 +87,19 @@ Overspend caught at simulate: `InsufficientBalance(495000000000000000, 100000000
 [pay 0.005](https://testnet.monadscan.com/tx/0x5815c1e01eb44c9318a263629b0aab3206f449c5d6417b28894839cf5f54d641).
 Floor refusals (fund robot 2 with 50 and 14 MON) logged as `refused`, nothing sent.
 
+**Receipt wait** (`npm run time:pay`, 5 sequential `pay()` calls, send accepted → receipt seen):
+
+| Setting | min | avg | max |
+|---|---|---|---|
+| viem default (`waitForTransactionReceipt`, 4000 ms poll) | 538 ms | 693 ms | 954 ms |
+| viem client `pollingInterval: 300` | 764 ms | 1159 ms | 1391 ms |
+| **direct `eth_getTransactionReceipt` poll every 300 ms (kept)** | **188 ms** | **556 ms** | **775 ms** |
+
+viem's wait checks once immediately, then only after a new block number, so lowering its interval didn't help;
+polling the receipt directly does, and caps a missed first check at ~300 ms instead of ~4 s. Set in
+`agents/config.json` → `network.receiptPollingMs`. The queue still waits for each receipt. End-to-end per tx
+(simulate + estimate + fees + send + receipt) is ~2–3 s and dominated by RPC round-trips, not the receipt wait.
+
 ## Findings
 
 - **Reserve balance — TESTED: gas-only wallets CAN sit below 10 MON.** AGENT_1 at 4.9872 MON sent a 0-value
@@ -108,6 +121,7 @@ Floor refusals (fund robot 2 with 50 and 14 MON) logged as `refused`, nothing se
 | P1 leftovers | 0.0024875 MON (AGENT_1 self-tx) |
 | P2 | 0.0311 MON gas; moved 3 MON DEPLOYER → AGENT_2 and 1 MON into MonaidCore (robots 1, 2). You added 15 MON to DEPLOYER by hand. |
 | P3 | 0.0564 MON gas (AGENT_1 0.0505, DEPLOYER 0.0060); 0.01 MON into robot 1, 0.01 MON paid out to the demo technician |
+| P3 timing tweak | 0.1262 MON gas (AGENT_1: 3 × 5 timing/proof pays); 0.02 MON paid out from robot 1 to the demo technician |
 
 ## Open items
 
