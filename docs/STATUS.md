@@ -13,8 +13,8 @@ WhatsApp transport belong to teammates.
 | P0 | Stop and re-scope | done (new CLAUDE.md committed) |
 | P1 | Finish the payment contract (MonaidCore v0) | done and merged (PR #1, leftovers in PR #2) |
 | P2 | Wallet manager and funding | done and merged (PR #2) |
-| P3 | Transaction sender | **done** — branch `step3/sendtx` (not merged) |
-| P4 | Jobs in the contract (MonaidCore v1) | **next** |
+| P3 | Transaction sender | done and merged (PR #3) |
+| P4 | Jobs in the contract (MonaidCore v1) | **next** — branch `step4/jobs` |
 | P5 | Robot agents and off-chain guardrails | — |
 | P6 | Agents API for teammates | — |
 | P7 | Muse (decision logic only) | — |
@@ -42,17 +42,17 @@ Funding rules (`agents/config.json`): DEPLOYER hard floor **12 MON** (every DEPL
 refuses with what is still spendable); agent gas floor **1 MON**, top-up target **3 MON**, top-ups capped at
 **10 MON per UTC day** (ledger `agents/logs/topups.jsonl`).
 
-| Name | Address | Role | Balance (end of P3) | Spendable (balance − floor) |
+| Name | Address | Role | Balance (after P3 merge) | Spendable (balance − floor) |
 |---|---|---|---|---|
 | DEPLOYER | `0x639B5bE0679EC82C7224F31d04bb3dD093222d5D` | owner / funder | 25.8766 MON | 13.8766 MON |
-| AGENT_1 | `0x31443AB8d8F13E16b86bfcDB4b965320E560824A` | agent, robot 1 | 4.9342 MON | 3.9342 MON |
+| AGENT_1 | `0x31443AB8d8F13E16b86bfcDB4b965320E560824A` | agent, robot 1 | 4.7659 MON | 3.7659 MON |
 | AGENT_2 | `0x16Cd0840ba8d68B526D5F5D9EB72626bB7A1CA45` | agent, robot 2 | 3.0000 MON | 2.0000 MON |
 
 ### Robots (registered in MonaidCore v0)
 
 | Robot | Robot address (derived from id, no key) | Agent | Balance in core |
 |---|---|---|---|
-| 1 | `0xB46d4FeCEFd31C1531FA84Dd61228b9Ea5107077` | AGENT_1 | 0.5 MON |
+| 1 | `0xB46d4FeCEFd31C1531FA84Dd61228b9Ea5107077` | AGENT_1 | 0.48 MON |
 | 2 | `0xE1f9bf1554a484d8993bF19e4cF02B79e4ccF254` | AGENT_2 | 0.5 MON |
 
 Old v0 demo-only addresses (no keys): robot `0x478962782092A83697F4d5BC9c44bc1e5Ba572a6` (AGENT_1, 0.005 MON in core),
@@ -119,9 +119,9 @@ polling the receipt directly does, and caps a missed first check at ~300 ms inst
 |---|---|
 | P1 | ≈ 0.079 MON gas + 0.01 MON sent into MonaidCore |
 | P1 leftovers | 0.0024875 MON (AGENT_1 self-tx) |
-| P2 | 0.0311 MON gas; moved 3 MON DEPLOYER → AGENT_2 and 1 MON into MonaidCore (robots 1, 2). You added 15 MON to DEPLOYER by hand. |
+| P2 | 0.0311 MON gas; moved 3 MON DEPLOYER → AGENT_2 and 1 MON into MonaidCore (robots 1, 2). You added 15 MON to DEPLOYER by hand. |
 | P3 | 0.0564 MON gas (AGENT_1 0.0505, DEPLOYER 0.0060); 0.01 MON into robot 1, 0.01 MON paid out to the demo technician |
-| P3 timing tweak | 0.1262 MON gas (AGENT_1: 3 × 5 timing/proof pays); 0.02 MON paid out from robot 1 to the demo technician |
+| P3 timing tweak | 0.1683 MON gas (AGENT_1: 4 batches × 5 pays — 3 timing runs + 1 proof rerun); 0.02 MON paid out from robot 1 to the demo technician |
 
 ## Open items
 
