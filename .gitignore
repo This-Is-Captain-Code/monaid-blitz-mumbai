@@ -1,0 +1,22 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+keystore/
+keystores/
+
+# Dependencies / build output
+node_modules/
+dist/
+artifacts/
+cache/
+typechain-types/
+coverage/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
