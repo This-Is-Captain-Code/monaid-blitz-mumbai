@@ -11,7 +11,21 @@
     },
     "wallets": {
       "DEPLOYER": "0x639B5bE0679EC82C7224F31d04bb3dD093222d5D",
-      "AGENT_1": "0x31443AB8d8F13E16b86bfcDB4b965320E560824A"
+      "AGENT_1": "0x31443AB8d8F13E16b86bfcDB4b965320E560824A",
+      "AGENT_2": "0x16Cd0840ba8d68B526D5F5D9EB72626bB7A1CA45"
+    },
+    "robots": {
+      "1": {
+        "address": "0xB46d4FeCEFd31C1531FA84Dd61228b9Ea5107077",
+        "agent": "AGENT_1",
+        "agentAddress": "0x31443AB8d8F13E16b86bfcDB4b965320E560824A"
+      },
+      "2": {
+        "address": "0xE1f9bf1554a484d8993bF19e4cF02B79e4ccF254",
+        "agent": "AGENT_2",
+        "agentAddress": "0x16Cd0840ba8d68B526D5F5D9EB72626bB7A1CA45"
+      },
+      "_note": "robotId -> on-chain robot address (derived: last 20 bytes of keccak256(\"monaid:robot:<id>\"), no key) and its agent wallet"
     }
   }
 }
