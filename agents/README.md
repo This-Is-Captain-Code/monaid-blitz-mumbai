@@ -51,3 +51,22 @@ npm run demo:pay [-- <robotId> <MON>]   # fund robot (DEPLOYER) + agent pays the
 npm run proof:sendtx                    # 5 concurrent pays from one agent → consecutive nonces, in order; decoded revert
 npm test                                # offline: revert decoding, network-vs-revert classification
 ```
+
+## Robot agents and guardrails (P5)
+
+`src/robot-agent.ts` — one `RobotAgent` per robot, owning `AGENT_<id>`:
+`postJob({ payout, claimWindow, reason })`, `acceptClaim(jobId, worker)`, `settleOnProof(jobId, proof)`, `expire(jobId)`,
+`cancel(jobId)`, `jobs()`, `refreshJob(jobId)`, `status()`. All sends go through `sendTx`.
+
+- `policy.json` — per-robot off-chain policy (`src/policy.ts`, pure `evaluate()`).
+- `src/approvals.ts` — owner-approval queue (`requestApproval`, `listApprovals`, `approve`, `reject`).
+- `src/killswitch.ts` — global kill switch (`MONAID_KILL=1`, `engageKillSwitch()`, `releaseKillSwitch()`), enforced in `sendTx`.
+- `src/ledger.ts` — daily spend (`logs/spend.jsonl`) and job records (`logs/jobs.json`).
+- `src/bus.ts` — in-process feed events (P6 streams them over SSE).
+
+```sh
+npm run demo:guardrails   # each guardrail blocking something, one line per case
+npm run check:agent       # approval → approve; happy path; fail path (expire)
+```
+
+Full table and how to demo each one: `docs/guardrails.md`.
