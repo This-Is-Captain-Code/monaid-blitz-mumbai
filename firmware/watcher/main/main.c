@@ -121,7 +121,7 @@ void app_main(void) {
         uint16_t pins;
         if (pca9535_get(&pins) == ESP_OK) {
             // Charger module proof: the instant USB power arrives, say so.
-            int vbus = (pins & EXP_VBUS_IN_DET) ? 1 : 0;
+            int vbus = (pins & EXP_VBUS_IN_DET) ? 0 : 1; // active low
             if (vbus != last_vbus) {
                 if (last_vbus != -1) { // skip boot-time initial state
                     char data[48];
