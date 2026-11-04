@@ -70,3 +70,18 @@ npm run check:agent       # approval → approve; happy path; fail path (expire)
 ```
 
 Full table and how to demo each one: `docs/guardrails.md`.
+
+## Agents API (P6)
+
+```sh
+npm run api:token     # once: MONAID_API_TOKEN into agents/.env (never printed)
+npm run api           # HTTP API + expiry watcher (config.json → api: host/port; MONAID_API_HOST / MONAID_API_PORT)
+npm run mock:bridge   # plays the teammates' bridge against the running API (rejections, happy, fail path)
+```
+
+- `src/service.ts` — event → action rules, claims, owner decisions, kill switch, expiry watcher (fail path).
+- `src/api.ts` — `node:http` server, token auth, validation, SSE `/feed`.
+- `workers.json` — worker registry (short ID → address). Claims carry only the ID.
+- `config.json` → `jobs` — payout tiers (normal 0.01, urgent 0.03 MON), claim window 60 s, trouble/proof kinds.
+
+Teammate-facing docs: `docs/agents-api.md`. Types: `shared/api-types.ts`.

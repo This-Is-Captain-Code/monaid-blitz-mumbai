@@ -43,8 +43,7 @@ export function parsePolicy(raw: RawPolicy, defaults: RawPolicy = {}): Policy {
 /** Policy for one robot from agents/policy.json (robot entry merged over defaults). */
 export function loadPolicy(robotId: string): Policy {
   const file = JSON.parse(readFileSync(POLICY_PATH, "utf8")) as { defaults: RawPolicy; robots: Record<string, RawPolicy> };
-  const raw = file.robots[robotId];
-  if (!raw) throw new Error(`policy.json has no entry for robot "${robotId}"`);
+  const raw = file.robots?.[robotId] ?? {}; // robots not listed use the defaults (robot ids stay config-only)
   return parsePolicy(raw, file.defaults);
 }
 

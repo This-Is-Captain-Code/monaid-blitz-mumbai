@@ -68,9 +68,11 @@ export function robotConfig(robotId: string) {
 /** Wallet role, from its name. */
 export function roleOf(name: string): string {
   if (name === "DEPLOYER") return "owner / funder";
+  if (name.startsWith("WORKER_")) return "demo worker";
   const r = config.robots.find((x) => x.agent === name);
   return r ? `agent, robot ${r.id}` : "unassigned";
 }
 
 /** Balance a wallet must keep. DEPLOYER: hard floor (sends value). Agents: gas floor. */
-export const floorOf = (name: string) => (name === "DEPLOYER" ? FLOORS.deployer : FLOORS.agentGas);
+export const floorOf = (name: string) =>
+  name === "DEPLOYER" ? FLOORS.deployer : name.startsWith("WORKER_") ? 0n : FLOORS.agentGas; // workers: no floor

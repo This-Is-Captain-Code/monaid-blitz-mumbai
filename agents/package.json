@@ -19,7 +19,10 @@
     "check:oog": "tsx scripts/check-oog.ts",
     "recover:core": "tsx scripts/recover-core.ts",
     "demo:guardrails": "tsx scripts/guardrails-demo.ts",
-    "check:agent": "tsx scripts/check-agent.ts"
+    "check:agent": "tsx scripts/check-agent.ts",
+    "api": "tsx scripts/api.ts",
+    "api:token": "tsx scripts/api-token.ts",
+    "mock:bridge": "tsx scripts/mock-bridge.ts"
   },
   "dependencies": {
     "dotenv": "^18.0.9",

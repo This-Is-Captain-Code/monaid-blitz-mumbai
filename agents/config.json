@@ -33,5 +33,26 @@
       "settle": 114100
     },
     "_fixedGasNote": "measured on v1 2026-11-04 via eth_estimateGas: postJob max 166377 (first job), claim 53165, settle 108634 (fresh worker); +5%"
-  }
+  },
+  "api": {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "_note": "Bind to the laptop's hotspot IP on the day (or MONAID_API_HOST / MONAID_API_PORT). Token: MONAID_API_TOKEN in agents/.env (npm run api:token)."
+  },
+  "jobs": {
+    "payouts": {
+      "normal": "0.01",
+      "urgent": "0.03"
+    },
+    "claimWindowSec": 60,
+    "troubleKinds": [
+      "crash"
+    ],
+    "proofKinds": [
+      "power_on"
+    ],
+    "expiryCheckMs": 2000,
+    "_note": "Events pick a payout TIER via data.level (normal|urgent), never an amount. urgent (0.03) is above the 0.02 owner-approval threshold."
+  },
+  "workersFile": "workers.json"
 }
