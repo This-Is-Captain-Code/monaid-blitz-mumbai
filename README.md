@@ -1,15 +1,14 @@
 # Monaid
 
 **First aid for robots, paid in MON.** A robot in trouble posts a job on Monad, a human fixes it,
-and payment releases on a physical proof straight from the device. No referee: a heartbeat
-returning, a wire going live, two devices reuniting — the hardware itself closes the contract.
+and payment releases on a physical proof straight from the device.
 
 Built at **Monad Blitz Devcon Mumbai** with two ESP32 robots, a cloud broker, and one escrow contract.
 
 ## Three modules, one escrow core
 
-- **Wake Me Up** — robots heartbeat and watch each other; when one goes silent it funds its own
-  revival job on Monad, and the technician is paid by the first heartbeat after the fix.
+- **Wake Me Up** — robots watch each other; when one goes silent it funds its own revival job on
+  Monad, and the technician is paid the moment it comes back to life.
 - **One charger, two robots** — robots auction a scarce charger on Monad, the winner pays the loser
   to yield, and a human gets paid to swap the cable the instant the winner's firmware sees power.
 - **Bring Me Home** — a lost pocket robot posts a rising bounty on itself, and whoever carries it
@@ -31,8 +30,8 @@ Watcher ─┘   creds + ACLs) ─> EMQX ─> bridge                │
 is broker identity (per-device MQTT credentials, topic ACLs). All wallets and crypto live on the
 server. The chain gates money; it is not a log. Everything in native MON.
 
-**The proof is physical.** Settlement fires on an event only the device can produce: the first
-heartbeat after a revival, the VBUS pin going live after a cable swap, both devices seeing each
+**The proof is physical.** Settlement fires on an event only the device can produce: a revived
+robot checking back in, the VBUS pin going live after a cable swap, both devices seeing each
 other again. Every event carries an empty `sig` slot — the production upgrade is devices signing
 payloads with a burned-in key and `settle` verifying via `ecrecover`. Same message, same flow.
 
@@ -77,8 +76,8 @@ docs/       STATUS.md (live progress), API docs
 
 ## Status
 
-Live today: both robots on the cloud broker over TLS, heartbeats, last-will death beat (~8 s),
-simulated crash/recover, USB-power proof, typed claims, full screen choreography, bridge with
+Live today: both robots on the cloud broker over TLS, liveness with ~8 s last-will death
+detection, simulated crash/recover, USB-power proof, typed claims, full screen choreography, bridge with
 round-trip self-test, MonaidCore v0 deployed with registered + funded robots. In progress: job
 flow wiring (post/claim/settle through the bridge), module contracts, Claude worker selection,
 portal.
