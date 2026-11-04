@@ -33,7 +33,9 @@ export const TX_CFG = {
   fixedGasPreflight: true,
   fixedGas: {} as Record<string, number>,
   ...((config as { tx?: object }).tx ?? {}),
-} as { separateSimulate: boolean; fixedGasPreflight: boolean; fixedGas: Record<string, number>; feeRefreshMs?: number };
+  // MONAID_TX_LEGACY=1 → the pre-latency-pass path (separate simulate, fresh fees, always estimate). For timing only.
+  ...(process.env.MONAID_TX_LEGACY === "1" ? { separateSimulate: true, fixedGas: {}, feeRefreshMs: 0 } : {}),
+} as { separateSimulate: boolean; fixedGasPreflight: boolean; fixedGas: Record<string, number>; feeRefreshMs?: number; _fixedGasNote?: string };
 
 const audited = new WeakSet<object>(); // errors already written to the audit log
 

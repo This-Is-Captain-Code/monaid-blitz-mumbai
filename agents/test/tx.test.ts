@@ -11,9 +11,9 @@ const revertWith = (errorName: string, args: readonly unknown[] = []) =>
   });
 
 test("custom errors decode to readable names with args", () => {
-  assert.deepEqual(decodeRevert(revertWith("NotAgent")), { name: "NotAgent", args: [] });
+  assert.deepEqual(decodeRevert(revertWith("NotRobotAgent")), { name: "NotRobotAgent", args: [] });
   assert.deepEqual(decodeRevert(revertWith("InsufficientBalance", [5n, 7n])), { name: "InsufficientBalance", args: [5n, 7n] });
-  assert.deepEqual(decodeRevert(revertWith("ContractPaused")), { name: "ContractPaused", args: [] });
+  assert.deepEqual(decodeRevert(revertWith("Paused")), { name: "Paused", args: [] });
 });
 
 test("unknown selectors still produce a label, plain errors produce nothing", () => {
@@ -27,6 +27,6 @@ test("network errors are retryable; reverts are not", () => {
   assert.equal(isNetworkError(new TimeoutError({ body: {}, url: "https://rpc" })), true);
   assert.equal(isNetworkError(new Error("fetch failed")), true);
   assert.equal(isNetworkError(new Error("429 Too Many Requests")), true);
-  assert.equal(isNetworkError(revertWith("NotAgent")), false);
+  assert.equal(isNetworkError(revertWith("NotRobotAgent")), false);
   assert.equal(isNetworkError(new Error("execution reverted")), false);
 });

@@ -4,7 +4,8 @@ import { publicClient, config } from "./chain.js";
 
 export type Fees = { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint };
 
-const REFRESH_MS: number = (config as { tx?: { feeRefreshMs?: number } }).tx?.feeRefreshMs ?? 0;
+const REFRESH_MS: number =
+  process.env.MONAID_TX_LEGACY === "1" ? 0 : ((config as { tx?: { feeRefreshMs?: number } }).tx?.feeRefreshMs ?? 0);
 
 let cached: { fees: Fees; at: number } | undefined;
 let inflight: Promise<Fees> | undefined;
