@@ -66,7 +66,8 @@ if (health?.ok) {
   ok(!!robots?.ok, "API token accepted");
   ok(robots?.killSwitch?.engaged === false, "kill switch off", robots?.killSwitch?.engaged ? `ENGAGED: ${robots.killSwitch.reason}` : "");
 }
-ok(!!(env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY), "OpenRouter key (decisions)", "missing → owner decides", true);
+const orKey = !!(env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY);
+ok(orKey, "OpenRouter key (decisions)", orKey ? "set" : "missing → owner decides", true);
 
 console.log(failed ? `\n✖ ${failed} check(s) failed — not ready` : "\n✔ preflight passed — ready to demo");
 if (failed) process.exitCode = 1;
