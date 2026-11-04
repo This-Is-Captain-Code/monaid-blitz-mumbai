@@ -53,6 +53,15 @@ With `FEED_ENABLED=1` the bridge reads your SSE stream; each `data:` line can ca
 { "robotId": 2, "screen": { "say": "technician on the way" } }
 ```
 
+Device command set (what the bridge publishes on `monaid/<dev>/cmd`):
+
+```json
+{ "cmd": "state", "state": "JOB OPEN" }
+{ "cmd": "job", "id": 7, "payout": "0.25 MON", "worker": "0x9A5E..56D7" }   // id missing/empty clears the card
+{ "cmd": "say", "text": "tech on the way" }
+{ "cmd": "simulate", "kind": "crash" }   // any event kind; device emits it with data.sim=true
+```
+
 `state` is free text up to 15 chars; the demo set: `IDLE, BIDDING, JOB OPEN, CLAIMED, PAID, BLOCKED`.
 
 Until your feed exists, test screens by hand:
