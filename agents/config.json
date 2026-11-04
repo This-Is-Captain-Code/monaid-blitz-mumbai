@@ -4,11 +4,18 @@
     "chainId": 10143,
     "rpcUrl": "https://testnet-rpc.monad.xyz",
     "txExplorer": "https://testnet.monadscan.com/tx/",
-    "addressExplorer": "https://testnet.monadvision.com/address/"
+    "addressExplorer": "https://testnet.monadvision.com/address/",
+    "receiptPollingMs": 300
   },
   "robots": [
-    { "id": "1", "agent": "AGENT_1" },
-    { "id": "2", "agent": "AGENT_2" }
+    {
+      "id": "1",
+      "agent": "AGENT_1"
+    },
+    {
+      "id": "2",
+      "agent": "AGENT_2"
+    }
   ],
   "funding": {
     "deployerFloorMon": "12",

@@ -1,6 +1,6 @@
 # Monaid — Status
 
-_Last updated: 2026-11-04, end of P2; next P3._
+_Last updated: 2026-11-04, end of P3; next P4._
 
 **My scope:** `contracts/`, `agents/`, `shared/`, `docs/` only — wallets, funding, transactions, robot agents,
 Muse logic, guardrails, and an API for teammates. Firmware, broker, MQTT bridge, screens, portal UI and
@@ -11,10 +11,10 @@ WhatsApp transport belong to teammates.
 | Step | Title | Status |
 |---|---|---|
 | P0 | Stop and re-scope | done (new CLAUDE.md committed) |
-| P1 | Finish the payment contract (MonaidCore v0) | done and merged (PR #1); leftovers done on `step2/wallets` |
-| P2 | Wallet manager and funding | **done** — branch `step2/wallets` (not merged) |
-| P3 | Transaction sender | **next** |
-| P4 | Jobs in the contract (MonaidCore v1) | — |
+| P1 | Finish the payment contract (MonaidCore v0) | done and merged (PR #1, leftovers in PR #2) |
+| P2 | Wallet manager and funding | done and merged (PR #2) |
+| P3 | Transaction sender | **done** — branch `step3/sendtx` (not merged) |
+| P4 | Jobs in the contract (MonaidCore v1) | **next** |
 | P5 | Robot agents and off-chain guardrails | — |
 | P6 | Agents API for teammates | — |
 | P7 | Muse (decision logic only) | — |
@@ -42,10 +42,10 @@ Funding rules (`agents/config.json`): DEPLOYER hard floor **12 MON** (every DEPL
 refuses with what is still spendable); agent gas floor **1 MON**, top-up target **3 MON**, top-ups capped at
 **10 MON per UTC day** (ledger `agents/logs/topups.jsonl`).
 
-| Name | Address | Role | Balance (end of P2) | Spendable (balance − floor) |
+| Name | Address | Role | Balance (end of P3) | Spendable (balance − floor) |
 |---|---|---|---|---|
-| DEPLOYER | `0x639B5bE0679EC82C7224F31d04bb3dD093222d5D` | owner / funder | 25.8926 MON | 13.8926 MON |
-| AGENT_1 | `0x31443AB8d8F13E16b86bfcDB4b965320E560824A` | agent, robot 1 | 4.9847 MON | 3.9847 MON |
+| DEPLOYER | `0x639B5bE0679EC82C7224F31d04bb3dD093222d5D` | owner / funder | 25.8766 MON | 13.8766 MON |
+| AGENT_1 | `0x31443AB8d8F13E16b86bfcDB4b965320E560824A` | agent, robot 1 | 4.9342 MON | 3.9342 MON |
 | AGENT_2 | `0x16Cd0840ba8d68B526D5F5D9EB72626bB7A1CA45` | agent, robot 2 | 3.0000 MON | 2.0000 MON |
 
 ### Robots (registered in MonaidCore v0)
@@ -68,6 +68,38 @@ technician `0x9A5E9183193DA5978efc86e537604f1f787456D7`.
 | fund robot 1, 0.5 MON | [0x20b6784e…](https://testnet.monadscan.com/tx/0x20b6784e2adf9ae8913b542f716548f1b8a3f980ec0019aa7b2583b657250af1) | 0.0081 |
 | fund robot 2, 0.5 MON | [0xc1debb4b…](https://testnet.monadscan.com/tx/0xc1debb4bd92c56c0b8664014cf218db95bdfff61deb0fbdda00ad12ea68e960d) | 0.0081 |
 
+### P3 — sendTx (`agents/src/tx.ts`)
+
+One path for every tx: DEPLOYER floor check → simulate → estimate +15% → sign with local nonce → send → receipt.
+Per-wallet serial queue; network-error retries only (same signed tx); custom errors decoded; audit log in
+`agents/logs/audit.jsonl` (git-ignored). Funding commands and `demo:pay` (moved from contracts/ to agents/) use it.
+
+**Nonce proof** (`npm run proof:sendtx`): 5 concurrent `pay` calls from AGENT_1 → nonces 2,3,4,5,6, all success,
+chain order = nonce order, no nonce errors, ~1.9 s per tx (serial: each waits for its receipt).
+[#1](https://testnet.monadscan.com/tx/0xee66f2cc67576f6fa56084ff2a7c476e8d310057622372dcf77e0127821992fb) ·
+[#2](https://testnet.monadscan.com/tx/0x96f32c5ebcb9ccdbf47fcaaf055df9b321b16454f93448bce8f497007725602d) ·
+[#3](https://testnet.monadscan.com/tx/0xd25f152d99a4be462f9b6fa3c66146431b534dd3b8b8b12464c2611208aae4c9) ·
+[#4](https://testnet.monadscan.com/tx/0x71b7dd505e9aa8fc386e99499bcabc1031b84046ed1b757e88a681f7ba39120b) ·
+[#5](https://testnet.monadscan.com/tx/0x18f7d9bb6fed2ee987d08736cbec699e2d10384c0e4a9653a0b4a08b00f8fc44).
+Overspend caught at simulate: `InsufficientBalance(495000000000000000, 1000000000000000000000)`, not sent, 0 gas.
+
+`demo:pay` via sendTx: [fund 0.01](https://testnet.monadscan.com/tx/0xbc60189a0071db36585cb444d729df3528e9ac6764977daa244157e5b0f065c6) ·
+[pay 0.005](https://testnet.monadscan.com/tx/0x5815c1e01eb44c9318a263629b0aab3206f449c5d6417b28894839cf5f54d641).
+Floor refusals (fund robot 2 with 50 and 14 MON) logged as `refused`, nothing sent.
+
+**Receipt wait** (`npm run time:pay`, 5 sequential `pay()` calls, send accepted → receipt seen):
+
+| Setting | min | avg | max |
+|---|---|---|---|
+| viem default (`waitForTransactionReceipt`, 4000 ms poll) | 538 ms | 693 ms | 954 ms |
+| viem client `pollingInterval: 300` | 764 ms | 1159 ms | 1391 ms |
+| **direct `eth_getTransactionReceipt` poll every 300 ms (kept)** | **188 ms** | **556 ms** | **775 ms** |
+
+viem's wait checks once immediately, then only after a new block number, so lowering its interval didn't help;
+polling the receipt directly does, and caps a missed first check at ~300 ms instead of ~4 s. Set in
+`agents/config.json` → `network.receiptPollingMs`. The queue still waits for each receipt. End-to-end per tx
+(simulate + estimate + fees + send + receipt) is ~2–3 s and dominated by RPC round-trips, not the receipt wait.
+
 ## Findings
 
 - **Reserve balance — TESTED: gas-only wallets CAN sit below 10 MON.** AGENT_1 at 4.9872 MON sent a 0-value
@@ -87,10 +119,11 @@ technician `0x9A5E9183193DA5978efc86e537604f1f787456D7`.
 |---|---|
 | P1 | ≈ 0.079 MON gas + 0.01 MON sent into MonaidCore |
 | P1 leftovers | 0.0024875 MON (AGENT_1 self-tx) |
-| P2 | 0.0311 MON gas; moved 3 MON DEPLOYER → AGENT_2 and 1 MON into MonaidCore (robots 1, 2). You added 15 MON to DEPLOYER by hand. |
+| P2 | 0.0311 MON gas; moved 3 MON DEPLOYER → AGENT_2 and 1 MON into MonaidCore (robots 1, 2). You added 15 MON to DEPLOYER by hand. |
+| P3 | 0.0564 MON gas (AGENT_1 0.0505, DEPLOYER 0.0060); 0.01 MON into robot 1, 0.01 MON paid out to the demo technician |
+| P3 timing tweak | 0.1262 MON gas (AGENT_1: 3 × 5 timing/proof pays); 0.02 MON paid out from robot 1 to the demo technician |
 
 ## Open items
 
 - MonaidCore v0 has no way to change a robot's agent after registration.
 - Monadscan verification skipped (no `ETHERSCAN_API_KEY`); MonadVision is the verify target.
-- P2 funding scripts send directly (estimate +15%); P3 switches them to the shared `sendTx` queue + audit log.

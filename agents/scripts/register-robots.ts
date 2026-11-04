@@ -1,9 +1,9 @@
 // npm run register:robots — DEPLOYER registers every robot in config.json with its agent wallet.
-// Gas only (no value), idempotent: skips robots already registered to the right agent.
-import { encodeFunctionData, formatEther, zeroAddress, type Address } from "viem";
+// Gas only (no value), idempotent: skips robots already registered to the right agent. Sends via sendTx.
+import { formatEther, zeroAddress, type Address } from "viem";
 import { account } from "../src/env.js";
 import { CORE_ABI, CORE_ADDRESS, config, publicClient, robotAddress } from "../src/chain.js";
-import { sendSimple, withMargin } from "../src/funding.js";
+import { describe, sendTx } from "../src/tx.js";
 
 let spent = 0n;
 for (const r of config.robots) {
@@ -21,9 +21,17 @@ for (const r of config.robots) {
     console.log(`• robot ${r.id} (${robot}) already registered to ${r.agent} — skipped`);
     continue;
   }
-  const data = encodeFunctionData({ abi: CORE_ABI, functionName: "registerRobot", args: [robot, agent] });
-  const gas = withMargin(await publicClient.estimateGas({ account: account("DEPLOYER"), to: CORE_ADDRESS, data }));
-  const { fee } = await sendSimple("DEPLOYER", `registerRobot robot ${r.id} (${robot}) -> ${r.agent} ${agent}`, { to: CORE_ADDRESS, data }, { gas });
-  spent += fee;
+  const res = await sendTx({
+    wallet: "DEPLOYER",
+    robot: r.id,
+    action: "registerRobot",
+    reason: `register robot ${r.id} with ${r.agent}`,
+    to: CORE_ADDRESS,
+    abi: CORE_ABI,
+    functionName: "registerRobot",
+    args: [robot, agent],
+  });
+  console.log(describe(res, `registerRobot robot ${r.id} (${robot}) -> ${r.agent} ${agent}`));
+  spent += res.fee;
 }
 console.log(`\nGas spent: ${formatEther(spent)} MON`);

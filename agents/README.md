@@ -30,3 +30,24 @@ npm run topup:agents [-- --dry-run]  # refill agent gas wallets below floor, wit
 
 Robot ids map to wallets `AGENT_<id>`. Robots hold no keys; the on-chain robot address is derived from the id
 (`keccak256("monaid:robot:<id>")`, last 20 bytes). Addresses are mirrored in `shared/addresses.json`.
+
+## Sending transactions — `src/tx.ts`
+
+Every transaction goes through `sendTx({ wallet, action, to, abi, functionName, args, value, robot, reason })`:
+
+1. DEPLOYER value sends: hard-floor check first (refuses with what is still spendable).
+2. Simulate (`eth_call`) — a revert stops here, decoded to a custom error name, **nothing sent, no gas**.
+3. Estimate gas + 15% (Monad charges the gas limit).
+4. Sign locally with a tracked nonce, send, wait for the receipt → `{ hash, link, nonce, gas, fee, receipt }`.
+
+- **Per-wallet serial queue:** sends from one wallet never overlap; nonces are tracked locally (resync on "nonce too low").
+- **Retries:** network errors only (HTTP/timeout/429/5xx), up to 3×, resending the *same* signed tx — never reverts.
+- **Errors:** `TxRevertedError` (`.errorName`, `.errorArgs`, `.stage` = simulate | estimate | onchain), `FloorError`.
+- **Audit:** one JSON line per attempt in `agents/logs/audit.jsonl`
+  (time, robot, wallet, action, args, value, reason, result = success | reverted | refused | error, hash, link, fee).
+
+```sh
+npm run demo:pay [-- <robotId> <MON>]   # fund robot (DEPLOYER) + agent pays the demo technician
+npm run proof:sendtx                    # 5 concurrent pays from one agent → consecutive nonces, in order; decoded revert
+npm test                                # offline: revert decoding, network-vs-revert classification
+```

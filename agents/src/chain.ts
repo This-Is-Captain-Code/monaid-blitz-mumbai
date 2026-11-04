@@ -38,7 +38,14 @@ export const monadTestnet = defineChain({
   rpcUrls: { default: { http: [readEnv().MONAD_RPC_URL || config.network.rpcUrl] } },
 });
 
-export const publicClient = createPublicClient({ chain: monadTestnet, transport: http() });
+/** How often waitForTransactionReceipt polls. undefined = viem's default. */
+export const RECEIPT_POLL_MS: number | undefined = (config.network as { receiptPollingMs?: number }).receiptPollingMs;
+
+export const publicClient = createPublicClient({
+  chain: monadTestnet,
+  transport: http(),
+  ...(RECEIPT_POLL_MS ? { pollingInterval: RECEIPT_POLL_MS } : {}),
+});
 export const walletClient = (name: string) =>
   createWalletClient({ chain: monadTestnet, transport: http(), account: account(name) });
 
