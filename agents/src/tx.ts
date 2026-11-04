@@ -10,6 +10,7 @@ import {
   BaseError,
   HttpRequestError,
   TimeoutError,
+  TransactionReceiptNotFoundError,
   decodeErrorResult,
   encodeFunctionData,
   formatEther,
@@ -21,7 +22,7 @@ import {
   type TransactionReceipt,
 } from "viem";
 import { AGENTS_DIR } from "./env.js";
-import { CORE_ABI, publicClient, txLink, walletClient } from "./chain.js";
+import { CORE_ABI, RECEIPT_POLL_MS, publicClient, txLink, walletClient } from "./chain.js";
 import { FloorError, assertDeployerCanSpend } from "./funding.js";
 
 const audited = new WeakSet<object>(); // errors already written to the audit log
@@ -52,6 +53,7 @@ export type TxResult = {
   gas: bigint;
   fee: bigint;
   receipt: TransactionReceipt;
+  confirmMs: number; // send accepted by RPC → receipt seen
 };
 
 /** A revert decoded into a readable custom error. Never retried. */
@@ -141,6 +143,28 @@ async function withNetworkRetry<T>(what: string, fn: () => Promise<T>): Promise<
       console.warn(`  ↻ network error during ${what}, retry ${attempt + 1}/${MAX_NETWORK_RETRIES} in ${wait}ms`);
       await new Promise((r) => setTimeout(r, wait));
     }
+  }
+}
+
+// ---------------- receipt wait ----------------
+
+const RECEIPT_TIMEOUT_MS = 60_000;
+
+/**
+ * Polls eth_getTransactionReceipt directly every RECEIPT_POLL_MS (Monad blocks are ~400 ms).
+ * Faster than viem's waitForTransactionReceipt, which waits for a new block number before each receipt check.
+ */
+async function waitReceipt(hash: Hash): Promise<TransactionReceipt> {
+  const interval = RECEIPT_POLL_MS ?? 300;
+  const deadline = Date.now() + RECEIPT_TIMEOUT_MS;
+  for (;;) {
+    try {
+      return await publicClient.getTransactionReceipt({ hash });
+    } catch (e) {
+      if (!(e instanceof TransactionReceiptNotFoundError) && !isNetworkError(e)) throw e;
+    }
+    if (Date.now() > deadline) throw new Error(`No receipt for ${hash} after ${RECEIPT_TIMEOUT_MS / 1000}s: ${txLink(hash)}`);
+    await new Promise((r) => setTimeout(r, interval));
   }
 }
 
@@ -244,8 +268,10 @@ async function sendNow(req: TxRequest): Promise<TxResult> {
         throw e;
       }
       nonces.set(req.wallet, nonce + 1);
+      const sentAt = performance.now();
 
-      const receipt = await withNetworkRetry("receipt", () => publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 }));
+      const receipt = await waitReceipt(hash);
+      const confirmMs = Math.round(performance.now() - sentAt);
       const fee = gas * receipt.effectiveGasPrice;
       if (receipt.status !== "success") {
         // replay to recover the custom error name
@@ -257,8 +283,8 @@ async function sendNow(req: TxRequest): Promise<TxResult> {
         }
         return fail("onchain", decoded ?? new Error("execution reverted"), hash);
       }
-      audit({ ...base, result: "success", hash, link: txLink(hash), nonce, gas: gas.toString(), fee: formatEther(fee), block: receipt.blockNumber });
-      return { hash, link: txLink(hash), nonce, gas, fee, receipt };
+      audit({ ...base, result: "success", hash, link: txLink(hash), nonce, gas: gas.toString(), fee: formatEther(fee), block: receipt.blockNumber, confirmMs });
+      return { hash, link: txLink(hash), nonce, gas, fee, receipt, confirmMs };
     }
   } catch (e) {
     if (e instanceof TxRevertedError) throw e;
