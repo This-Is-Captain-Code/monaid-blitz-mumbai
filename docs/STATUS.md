@@ -1,6 +1,6 @@
 # Monaid — Status
 
-_Last updated: 2026-11-04, end of P4; next P5._
+_Last updated: 2026-11-04, end of P5; next P6._
 
 **My scope:** `contracts/`, `agents/`, `shared/`, `docs/` only — wallets, funding, transactions, robot agents,
 Muse logic, guardrails, and an API for teammates. Firmware, broker, MQTT bridge, screens, portal UI and
@@ -14,9 +14,9 @@ WhatsApp transport belong to teammates.
 | P1 | Finish the payment contract (MonaidCore v0) | done and merged (PR #1, #2) |
 | P2 | Wallet manager and funding | done and merged (PR #2) |
 | P3 | Transaction sender | done and merged (PR #3) |
-| P4 | Jobs in the contract (MonaidCore v1.1) + sendTx latency pass | **done** — branch `step4/jobs` (PR "P4 jobs + latency pass") |
-| P5 | Robot agents and off-chain guardrails | **next** |
-| P6 | Agents API for teammates | — |
+| P4 | Jobs in the contract (MonaidCore v1.1) + sendTx latency pass | done and merged (PR #4) |
+| P5 | Robot agents and off-chain guardrails | **done** — branch `step5/agents` (not merged) |
+| P6 | Agents API for teammates | **next** |
 | P7 | Muse (decision logic only) | — |
 | P8 | Module contract (Charger / Lost / Down, team picks) | — |
 | P9 | Demo hardening | — |
@@ -59,16 +59,16 @@ Machine-readable: `shared/addresses.json` (current + `history`) and `shared/abi/
 All keys in `agents/.env` (git-ignored); `contracts/` reads from it. Funding rules (`agents/config.json`): DEPLOYER hard floor
 **12 MON**; agent gas floor **1 MON**, top-up target **3 MON**, top-ups capped at **10 MON per UTC day**.
 
-| Name | Address | Role | Balance (end of P4) | Spendable |
+| Name | Address | Role | Balance (end of P5) | Spendable |
 |---|---|---|---|---|
 | DEPLOYER | `0x639B5bE0679EC82C7224F31d04bb3dD093222d5D` | owner / funder | 25.5257 MON | 13.5257 MON |
-| AGENT_1 | `0x31443AB8d8F13E16b86bfcDB4b965320E560824A` | agent, robot 1 | 4.5708 MON | 3.5708 MON |
-| AGENT_2 | `0x16Cd0840ba8d68B526D5F5D9EB72626bB7A1CA45` | agent, robot 2 | 2.9831 MON | 1.9831 MON |
+| AGENT_1 | `0x31443AB8d8F13E16b86bfcDB4b965320E560824A` | agent, robot 1 | 4.5273 MON | 3.5273 MON |
+| AGENT_2 | `0x16Cd0840ba8d68B526D5F5D9EB72626bB7A1CA45` | agent, robot 2 | 2.8919 MON | 1.8919 MON |
 
 | Robot | Robot address (derived from id, no key) | Agent | Balance in v1.1 |
 |---|---|---|---|
 | 1 | `0xB46d4FeCEFd31C1531FA84Dd61228b9Ea5107077` | AGENT_1 | 0.5 MON |
-| 2 | `0xE1f9bf1554a484d8993bF19e4cF02B79e4ccF254` | AGENT_2 | 0.5 MON |
+| 2 | `0xE1f9bf1554a484d8993bF19e4cF02B79e4ccF254` | AGENT_2 | 0.499 MON |
 
 ## sendTx (`agents/src/tx.ts`)
 
@@ -95,6 +95,23 @@ retries only; custom errors decoded; one audit line per attempt in `agents/logs/
 | **direct receipt poll every 300 ms (kept)** | **188 ms** | **556 ms** | **775 ms** |
 
 Nonce proof (`npm run proof:sendtx`): 5 concurrent pays from one agent → consecutive nonces, chain order = nonce order.
+
+## Robot agents and guardrails (P5)
+
+`RobotAgent` per robot (`agents/src/robot-agent.ts`): postJob, acceptClaim, settleOnProof, expire, cancel — via sendTx,
+after the off-chain checks: kill switch → policy (`agents/policy.json`: maxPayoutPerJob 0.05, maxSpendPerDay 0.1,
+maxOpenJobs 2, ownerApprovalAbove 0.02 MON, allowedActions) → owner-approval queue above the threshold.
+Kill switch (`MONAID_KILL=1` / `engageKillSwitch()`) is enforced inside sendTx, so it stops every send.
+Full table and demo instructions: `docs/guardrails.md`.
+
+- `npm run demo:guardrails` — 9/9 beats: policy cap, owner approval, allowed job, daily cap, max open jobs,
+  action not allowed, kill switch (agent + DEPLOYER), on-chain `PayoutTooHigh` revert
+  ([0xc4b3ff22…](https://testnet.monadscan.com/tx/0xc4b3ff224fec1cb6b9391af680c556da41c16e08ae7334b2e201a2eabd5d98d2)).
+- `npm run check:agent` (robot 2) — approval → approve → posted → cancel; happy path job 5
+  ([settle](https://testnet.monadscan.com/tx/0xb14e7e2504a93e3e39f2df75abb640eee972af5a378cca6877c423e89d2760d0));
+  fail path job 6 ([expire](https://testnet.monadscan.com/tx/0x1f80103523e1ae559605fdb719727c447555a48b9924fc651844ef9699c3d52d)).
+  A real network error mid-send was retried with the same signed tx and succeeded.
+- Agents unit tests: 10 (sendTx error handling + policy rules).
 
 ## Findings
 
@@ -126,6 +143,7 @@ Nonce proof (`npm run proof:sendtx`): 5 concurrent pays from one agent → conse
 | P2 | 0.0311 MON gas; 3 MON DEPLOYER → AGENT_2, 1 MON into v0. You added 15 MON to DEPLOYER. |
 | P3 | 0.0564 MON gas |
 | P3 timing tweak | 0.1683 MON gas |
+| P5 | 0.1347 MON gas (AGENT_1 0.0435 guardrails demo, AGENT_2 0.0912 check:agent); 0.001 MON paid from robot 2 to a test worker |
 | P4 | ≈ 0.53 MON gas in total (two deploys ≈ 0.275, recoveries ≈ 0.046, registers/funds ≈ 0.041, gas measurement 0.111, check:oog ≈ 0.059). 1.985 MON recovered from v0/v1; 1 MON now in v1.1. |
 
 ## Open items
