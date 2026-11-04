@@ -1,24 +1,45 @@
 // The agents service: one RobotAgent per configured robot, the event → action rules, the expiry watcher.
 // The HTTP layer (src/api.ts) is a thin wrapper around this.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { formatEther, parseEther } from "viem";
-import { AGENTS_DIR, account } from "./env.js";
+import { account } from "./env.js";
 import { CORE_ABI, CORE_ADDRESS, config, publicClient } from "./chain.js";
 import { bus } from "./bus.js";
 import { RobotAgent } from "./robot-agent.js";
 import { approve, listApprovals, reject } from "./approvals.js";
 import { engageKillSwitch, killSwitch, releaseKillSwitch } from "./killswitch.js";
-import { getJobRecord, listJobs, spentToday, type JobRecord } from "./ledger.js";
+import { getJobRecord, listJobs, saveJob, spentToday, type JobRecord } from "./ledger.js";
 import { resolveWorker, workerIdOf, workers } from "./workers.js";
 import type { TxResult } from "./tx.js";
 import { museDecide } from "./muse.js";
 
 const JOBS_CFG = (config as unknown as {
-  jobs: { payouts: Record<string, string>; claimWindowSec: number; troubleKinds: string[]; proofKinds: string[]; expiryCheckMs: number };
+  jobs: {
+    payouts: Record<string, string>;
+    claimWindowSec: number;
+    troubleKinds: string[];
+    claimKinds: string[];
+    clickWorker: string;
+    proofKinds: Record<string, string[]>; // trigger kind → kinds that prove the fix after the claim
+    expiryCheckMs: number;
+  };
 }).jobs;
 
-export const EVENT_KINDS = ["claim", "power_on", "power_off", "beacon_seen", "knob", "key", "crash"] as const;
+// Kinds the bridge sends (server/bridge/README.md) plus the earlier draft kinds.
+export const EVENT_KINDS = [
+  "heartbeat", "down", "up", "crash", "recover", "click", "knob", "claim", "power",
+  "power_on", "power_off", "beacon_seen", "key",
+] as const;
+const QUIET_KINDS = new Set(["heartbeat", "knob"]); // not echoed on the feed (every 10 s per device)
+
+/** Screen states the device firmware knows (free text ≤ 15 chars). */
+const SCREEN: Record<string, string> = {
+  job_posted: "JOB OPEN",
+  approval_requested: "BIDDING",
+  job_claimed: "CLAIMED",
+  job_settled: "PAID",
+  job_expired: "BLOCKED",
+  job_cancelled: "IDLE",
+};
 
 /** An API-level error with an HTTP status and a stable code (see shared/api-types.ts ErrorCode). */
 export class ApiError extends Error {
@@ -30,29 +51,48 @@ export class ApiError extends Error {
 
 const txRef = (t: TxResult) => ({ hash: t.hash, link: t.link });
 
-// ---- per-robot sequence numbers (persisted so a restart doesn't accept replays) ----
-const SEQ_FILE = join(AGENTS_DIR, "logs", "seq.json");
-type SeqState = Record<string, { lastSeq: number; lastEventAt: string }>;
-const readSeq = (): SeqState => (existsSync(SEQ_FILE) ? JSON.parse(readFileSync(SEQ_FILE, "utf8")) : {});
-function writeSeq(s: SeqState) {
-  mkdirSync(join(AGENTS_DIR, "logs"), { recursive: true });
-  writeFileSync(SEQ_FILE, JSON.stringify(s, null, 2));
-}
+// ---- duplicate dropping: same robot + kind + seq + data within 60 s (QoS 1 redelivery) ----
+// Device seq is per boot (resets on reboot) and the bridge sends seq 0 for broker up/down, so we don't
+// require increasing seqs; we only drop exact repeats.
+const DEDUPE_MS = 60_000;
 
 export class MonaidService {
   readonly agents = new Map<string, RobotAgent>();
-  private seq: SeqState = readSeq();
+  private recent = new Map<string, number>(); // dedupe key → time seen
+  private lastEvent: Record<string, { seq: number; at: string }> = {};
   private expiring = new Set<string>();
   private watcher?: ReturnType<typeof setInterval>;
 
   constructor() {
     for (const r of config.robots) this.agents.set(r.id, new RobotAgent(r.id));
     workers(); // load + validate the registry at startup
+    // Screen lines in the bridge's format, to BOTH devices: {robotId: <bridge number>, screen: {...}}.
+    bus.on("feed", (e) => {
+      const state = SCREEN[e.type];
+      if (!state || !e.robot || e.type === "screen") return;
+      const job = typeof e.jobId === "string" ? getJobRecord(e.jobId) : undefined;
+      const payout = job ? `${formatEther(BigInt(job.payout))} MON` : "";
+      const worker = job?.worker ? (workerIdOf(job.worker) ?? job.worker).toUpperCase() : "";
+      for (const r of config.robots) {
+        const robotId = r.bridgeId ?? r.id;
+        const out = (screen: Record<string, unknown>) => bus.emit("feed", { type: "screen", robot: e.robot, robotId, screen });
+        out({ state });
+        if (job && (e.type === "job_posted" || e.type === "job_claimed")) out({ cmd: "job", id: Number(job.jobId), payout, worker });
+        if (e.type === "job_settled") out({ say: `paid ${payout} to ${worker}`.slice(0, 40) });
+        if (e.type === "job_expired") out({ say: "no fix in time" });
+      }
+    });
   }
 
+  /** Accepts the robot id (MQTT username, e.g. "tdeck-01") or the bridge's number (1, "1"). */
   agent(robotId: unknown): RobotAgent {
-    const a = typeof robotId === "string" ? this.agents.get(robotId) : undefined;
-    if (!a) throw new ApiError(404, "UNKNOWN_ROBOT", `Unknown robot "${String(robotId).slice(0, 40)}". Known: ${[...this.agents.keys()].join(", ")}`);
+    const key = typeof robotId === "number" || typeof robotId === "string" ? String(robotId) : "";
+    const id = this.agents.has(key) ? key : config.robots.find((r) => r.bridgeId !== undefined && String(r.bridgeId) === key)?.id;
+    const a = id ? this.agents.get(id) : undefined;
+    if (!a) {
+      const known = config.robots.map((r) => (r.bridgeId !== undefined ? `${r.id} (${r.bridgeId})` : r.id)).join(", ");
+      throw new ApiError(404, "UNKNOWN_ROBOT", `Unknown robot "${String(robotId).slice(0, 40)}". Known: ${known}`);
+    }
     return a;
   }
 
@@ -69,16 +109,17 @@ export class MonaidService {
     if (!Number.isSafeInteger(ts) || (ts as number) < 0) throw new ApiError(400, "BAD_REQUEST", "ts must be unix seconds (integer)");
     if (typeof data !== "object" || data === null || Array.isArray(data)) throw new ApiError(400, "BAD_REQUEST", "data must be an object");
 
-    const last = this.seq[agent.id]?.lastSeq;
-    if (last !== undefined && (seq as number) <= last) {
-      throw new ApiError(409, "STALE_SEQ", `seq ${seq} <= last accepted ${last} for robot ${agent.id} (duplicate or replay)`);
-    }
-    // Accept the seq BEFORE acting, so a retried request can never trigger the action twice.
-    this.seq[agent.id] = { lastSeq: seq as number, lastEventAt: new Date().toISOString() };
-    writeSeq(this.seq);
-    bus.emit("feed", { type: "event", robot: agent.id, kind, seq, ts });
-
+    // Drop exact repeats (same robot, kind, seq, data within 60 s) — recorded BEFORE acting, so a redelivered
+    // event can never trigger an action twice. Reply 200 so the bridge doesn't treat it as an error.
     const base = { ok: true as const, robotId: agent.id, seq: seq as number };
+    const now = Date.now();
+    for (const [k, t] of this.recent) if (now - t > DEDUPE_MS) this.recent.delete(k);
+    const key = JSON.stringify([agent.id, kind, seq, data]);
+    if (this.recent.has(key)) return { ...base, action: "ignored" as const, note: "duplicate (same robot, kind, seq, data within 60 s)" };
+    this.recent.set(key, now);
+    this.lastEvent[agent.id] = { seq: seq as number, at: new Date().toISOString() };
+    if (!QUIET_KINDS.has(kind)) bus.emit("feed", { type: "event", robot: agent.id, kind, seq, ts });
+
     const open = this.activeJob(agent.id);
 
     if (JOBS_CFG.troubleKinds.includes(kind)) {
@@ -89,27 +130,45 @@ export class MonaidService {
       if (r.status === "pending_approval") {
         return { ...base, action: "pending_approval" as const, approvalId: r.approval.id, payout: formatEther(payout), note: r.approval.summary };
       }
+      const rec = getJobRecord(r.jobId);
+      if (rec) saveJob({ ...rec, trigger: kind });
       return { ...base, action: "job_posted" as const, jobId: r.jobId, payout: r.payout, tx: txRef(r.tx) };
     }
 
-    if (kind === "claim") {
-      const worker = resolveWorker(data.worker); // throws UNKNOWN_WORKER
-      if (!open || open.status !== "Open") {
-        return { ...base, action: "ignored" as const, note: `robot ${agent.id} has no open job to claim` };
+    if (JOBS_CFG.claimKinds.includes(kind)) {
+      // T-Deck types the worker id (data.text); data.worker also accepted; a Watcher click uses the configured worker.
+      const raw = data.worker ?? data.text ?? (kind === "click" ? JOBS_CFG.clickWorker : undefined);
+      let worker: { id: string; address: `0x${string}` };
+      try {
+        worker = resolveWorker(typeof raw === "string" ? raw.trim().toLowerCase() : raw);
+      } catch {
+        const robotId = config.robots.find((r) => r.id === agent.id)?.bridgeId ?? agent.id;
+        bus.emit("feed", { type: "screen", robot: agent.id, robotId, screen: { say: "UNKNOWN WORKER" } });
+        return { ...base, action: "ignored" as const, note: `unknown worker "${String(raw).slice(0, 32)}"` };
       }
-      const tx = await agent.acceptClaim(open.jobId, worker.address, `claim event seq ${seq} by ${worker.id}`);
-      return { ...base, action: "claim_accepted" as const, jobId: open.jobId, worker: worker.id, tx: txRef(tx) };
+      // A claim applies to the oldest open job on ANY robot (typed on whichever device is at hand).
+      const target = this.oldestOpenJob();
+      if (!target) return { ...base, action: "ignored" as const, note: "no open job to claim" };
+      const tx = await this.agent(target.robot).acceptClaim(target.jobId, worker.address, `${kind} on ${agent.id} seq ${seq} by ${worker.id}`);
+      return { ...base, action: "claim_accepted" as const, jobId: target.jobId, worker: worker.id, tx: txRef(tx), ...(target.robot !== agent.id ? { note: `claimed robot ${target.robot}'s job` } : {}) };
     }
 
-    if (JOBS_CFG.proofKinds.includes(kind)) {
-      if (!open || open.status !== "Claimed") {
-        return { ...base, action: "ignored" as const, note: `robot ${agent.id} has no claimed job; ${kind} is not a proof right now` };
+    if (open?.status === "Claimed") {
+      const proofs = JOBS_CFG.proofKinds[open.trigger ?? ""] ?? Object.values(JOBS_CFG.proofKinds).flat();
+      const isProof = proofs.includes(kind) && !(kind === "power" && data.on !== true);
+      if (isProof) {
+        const tx = await agent.settleOnProof(open.jobId, { kind, seq, ts, data }, `${kind} after claim = proof (${open.trigger ?? "job"})`);
+        return { ...base, action: "job_settled" as const, jobId: open.jobId, worker: workerIdOf(open.worker) ?? open.worker, payout: formatEther(BigInt(open.payout)), tx: txRef(tx) };
       }
-      const tx = await agent.settleOnProof(open.jobId, { kind, seq, ts, data }, `${kind} event seq ${seq} = proof`);
-      return { ...base, action: "job_settled" as const, jobId: open.jobId, worker: workerIdOf(open.worker) ?? open.worker, payout: formatEther(BigInt(open.payout)), tx: txRef(tx) };
     }
 
-    return { ...base, action: "ignored" as const, note: `${kind} has no core action` };
+    return { ...base, action: "ignored" as const, note: open ? `${kind}: no action for job ${open.jobId} (${open.status})` : `${kind}: nothing to do` };
+  }
+
+  private oldestOpenJob(): JobRecord | undefined {
+    return listJobs()
+      .filter((j) => j.status === "Open" && this.agents.has(j.robot))
+      .sort((a, b) => Number(a.jobId) - Number(b.jobId))[0];
   }
 
   /** The robot's current job (Open or Claimed), newest first. */
@@ -168,22 +227,22 @@ export class MonaidService {
           { id: "reject", label: "Reject: keep the MON; the robot waits for the owner" },
         ],
       });
-      if (muse.source !== "muse") {
-        return { ok: true as const, mode: "approval" as const, approvalId: a.id, muse, applied: null, note: "Muse fell back: the approval stays pending — owner decides (POST /owner/decide)" };
+      if (muse.source !== "claude") {
+        return { ok: true as const, mode: "approval" as const, approvalId: a.id, claude: muse, applied: null, note: "Claude fell back: the approval stays pending — owner decides (POST /owner/decide)" };
       }
       try {
         const applied = await this.decide({ approvalId: a.id, decision: muse.choice });
-        return { ok: true as const, mode: "approval" as const, approvalId: a.id, muse, applied };
+        return { ok: true as const, mode: "approval" as const, approvalId: a.id, claude: muse, applied };
       } catch (e) {
         // Muse's pick still had to pass every guardrail; report what stopped it.
-        return { ok: true as const, mode: "approval" as const, approvalId: a.id, muse, applied: { ok: false as const, error: (e as Error).name, message: (e as Error).message } };
+        return { ok: true as const, mode: "approval" as const, approvalId: a.id, claude: muse, applied: { ok: false as const, error: (e as Error).name, message: (e as Error).message } };
       }
     }
     try {
       const muse = await museDecide({ question: body.question, options: body.options });
-      return { ok: true as const, mode: "advice" as const, muse };
+      return { ok: true as const, mode: "advice" as const, claude: muse };
     } catch (e) {
-      throw new ApiError(400, "BAD_REQUEST", `muse decision: ${(e as Error).message}`);
+      throw new ApiError(400, "BAD_REQUEST", `decision: ${(e as Error).message}`);
     }
   }
 
@@ -196,12 +255,11 @@ export class MonaidService {
     return { ok: true as const, ...killSwitch() };
   }
 
-  // ---------------- POST /admin/reset-seq (rehearsals: let a device start counting from 0 again) ----------------
+  // ---------------- POST /admin/reset-seq (rehearsals: forget recent events so nothing is treated as a duplicate) ----------------
 
   resetSeq(body: Record<string, unknown>) {
     const ids = body.robotId === undefined ? [...this.agents.keys()] : [this.agent(body.robotId).id];
-    for (const id of ids) delete this.seq[id];
-    writeSeq(this.seq);
+    for (const k of [...this.recent.keys()]) if (ids.includes(JSON.parse(k)[0])) this.recent.delete(k);
     bus.emit("feed", { type: "seq_reset", robots: ids });
     return { ok: true as const, reset: ids };
   }
@@ -209,8 +267,8 @@ export class MonaidService {
   // ---------------- reads ----------------
 
   jobs(robotId?: string) {
-    if (robotId !== undefined) this.agent(robotId);
-    return listJobs(robotId)
+    const id = robotId !== undefined ? this.agent(robotId).id : undefined;
+    return listJobs(id)
       .sort((a, b) => Number(b.jobId) - Number(a.jobId))
       .map((j) => ({
         jobId: j.jobId,
@@ -244,8 +302,8 @@ export class MonaidService {
           escrow: formatEther(escrow),
           openJobs: s.openJobs,
           spentToday: formatEther(spentToday(a.id)),
-          lastSeq: this.seq[a.id]?.lastSeq ?? null,
-          lastEventAt: this.seq[a.id]?.lastEventAt ?? null,
+          lastSeq: this.lastEvent[a.id]?.seq ?? null,
+          lastEventAt: this.lastEvent[a.id]?.at ?? null,
         };
       }),
     );

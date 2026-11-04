@@ -23,6 +23,7 @@ export type JobRecord = {
   claimDeadline?: number; // unix seconds
   postedAt: string;
   reason?: string;
+  trigger?: string; // event kind that caused the job (decides which events count as proof)
   txs: { action: string; hash: string; link: string }[];
 };
 

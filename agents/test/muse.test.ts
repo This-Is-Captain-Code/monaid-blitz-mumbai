@@ -16,10 +16,10 @@ const fake = (out: Awaited<ReturnType<ModelCall>>, delayMs = 0): ModelCall => as
   return out;
 };
 
-test("valid pick → source muse with choice and reason", async () => {
+test("valid pick → source claude with choice and reason", async () => {
   const r = await museDecide(decision, fake({ choice: "robot-1", reason: "The demo at 15:00 depends on it.", model: "fake" }), { requireKey: false });
-  assert.equal(r.source, "muse");
-  assert.equal(r.source === "muse" && r.choice, "robot-1");
+  assert.equal(r.source, "claude");
+  assert.equal(r.source === "claude" && r.choice, "robot-1");
 });
 
 test("choice outside the options → owner decides (invalid_output)", async () => {

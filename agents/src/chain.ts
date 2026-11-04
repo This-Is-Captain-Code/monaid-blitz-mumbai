@@ -6,6 +6,7 @@ import {
   createWalletClient,
   defineChain,
   getAddress,
+  fallback,
   http,
   keccak256,
   parseEther,
@@ -19,8 +20,8 @@ import { AGENTS_DIR, account, readEnv } from "./env.js";
 const SHARED = join(AGENTS_DIR, "..", "shared");
 
 export const config = JSON.parse(readFileSync(join(AGENTS_DIR, "config.json"), "utf8")) as {
-  network: { name: string; chainId: number; rpcUrl: string; txExplorer: string; addressExplorer: string };
-  robots: { id: string; agent: string }[];
+  network: { name: string; chainId: number; rpcUrl: string; backupRpcUrl?: string; txExplorer: string; addressExplorer: string };
+  robots: { id: string; agent: string; bridgeId?: number; addressId?: string; label?: string }[];
   funding: { deployerFloorMon: string; agentGasFloorMon: string; agentTopupTargetMon: string; agentTopupDailyCapMon: string };
 };
 
@@ -41,13 +42,19 @@ export const monadTestnet = defineChain({
 /** How often waitForTransactionReceipt polls. undefined = viem's default. */
 export const RECEIPT_POLL_MS: number | undefined = (config.network as { receiptPollingMs?: number }).receiptPollingMs;
 
+/** Primary RPC, then the backup (Ankr) if the primary fails — the venue network drops requests to the primary. */
+function rpcTransport() {
+  const primary = http(readEnv().MONAD_RPC_URL || config.network.rpcUrl, { retryCount: 1, timeout: 8_000 });
+  return config.network.backupRpcUrl ? fallback([primary, http(config.network.backupRpcUrl, { retryCount: 1, timeout: 8_000 })]) : primary;
+}
+
 export const publicClient = createPublicClient({
   chain: monadTestnet,
-  transport: http(),
+  transport: rpcTransport(),
   ...(RECEIPT_POLL_MS ? { pollingInterval: RECEIPT_POLL_MS } : {}),
 });
 export const walletClient = (name: string) =>
-  createWalletClient({ chain: monadTestnet, transport: http(), account: account(name) });
+  createWalletClient({ chain: monadTestnet, transport: rpcTransport(), account: account(name) });
 
 export const txLink = (hash: string) => `${config.network.txExplorer}${hash}`;
 export const addressLink = (addr: string) => `${config.network.addressExplorer}${addr}`;
@@ -56,8 +63,11 @@ const addresses = JSON.parse(readFileSync(join(SHARED, "addresses.json"), "utf8"
 export const CORE_ADDRESS = getAddress(addresses.monadTestnet.MonaidCore.address) as Address;
 export const CORE_ABI = JSON.parse(readFileSync(join(SHARED, "abi", "MonaidCore.json"), "utf8")) as Abi;
 
-/** Robots have no keys; their on-chain id is an address derived from the robot id. */
-export const robotAddress = (robotId: string): Address => getAddress(slice(keccak256(toHex(`monaid:robot:${robotId}`)), 12));
+/** Robots have no keys; their on-chain id is derived from `addressId` (default: the robot id). */
+export const robotAddress = (robotId: string): Address => {
+  const seed = config.robots.find((x) => x.id === robotId)?.addressId ?? robotId;
+  return getAddress(slice(keccak256(toHex(`monaid:robot:${seed}`)), 12));
+};
 
 export function robotConfig(robotId: string) {
   const r = config.robots.find((x) => x.id === robotId);

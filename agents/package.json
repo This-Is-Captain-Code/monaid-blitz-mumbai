@@ -23,7 +23,10 @@
     "api": "tsx scripts/api.ts",
     "api:token": "tsx scripts/api-token.ts",
     "mock:bridge": "tsx scripts/mock-bridge.ts",
-    "check:muse": "tsx scripts/check-muse.ts"
+    "check:muse": "tsx scripts/check-muse.ts",
+    "reset:demo": "tsx scripts/reset-demo.ts",
+    "preflight": "tsx scripts/preflight.ts",
+    "check:claude": "tsx scripts/check-muse.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.4.0",

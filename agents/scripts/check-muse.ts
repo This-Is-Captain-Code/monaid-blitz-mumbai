@@ -1,4 +1,4 @@
-// npm run check:muse — one real Muse decision against the Claude API (needs ANTHROPIC_API_KEY in agents/.env).
+// npm run check:muse (alias check:claude) — one real decision by Claude against the Claude API (needs ANTHROPIC_API_KEY in agents/.env).
 // Sends no transactions. Prints Muse's choice + reason, or the fallback and why.
 import { MUSE_CFG, museDecide, ownerContext } from "../src/muse.js";
 
@@ -13,4 +13,4 @@ console.log(`model ${MUSE_CFG.model} · effort ${MUSE_CFG.effort} · timeout ${M
 console.log("owner context:", JSON.stringify(ownerContext()));
 console.log("decision:", JSON.stringify(decision), "\n");
 const r = await museDecide(decision);
-console.log(r.source === "muse" ? `✔ Muse chose ${r.choice} in ${r.ms} ms — "${r.reason}" (${r.model})` : `↩ owner decides (${r.fallback}, ${r.ms} ms): ${r.detail}`);
+console.log(r.source === "claude" ? `✔ Claude chose ${r.choice} in ${r.ms} ms — "${r.reason}" (${r.model})` : `↩ owner decides (${r.fallback}, ${r.ms} ms): ${r.detail}`);

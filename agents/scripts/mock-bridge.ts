@@ -1,54 +1,58 @@
-// npm run mock:bridge [-- happy|fail|all] [--approval]
-// Pretends to be the teammates' MQTT bridge + portal and drives the RUNNING Agents API (npm run api) over HTTP,
-// printing the /feed stream as it goes. Nothing here touches the bridge's real code.
-//   happy (robot 1): crash → job posted → claim (worker demo-1) → power_on proof → worker paid
-//          --approval: crash with level "urgent" (0.03 MON) → waits for the owner → POST /owner/decide → then as above
-//          --muse:     like --approval, but Muse decides first (POST /muse/decide); on fallback the owner decides
-//   fail  (robot 2): crash → job posted → claim event (demo-2) → no proof → claim window passes → expired, escrow back
-// Also checks the rejections (no gas): wrong token, unknown robot, replayed seq, unknown worker.
+// npm run mock:bridge [-- happy|fail|all]
+// Pretends to be the teammates' bridge (step/firmware-net: server/bridge/bridge.mjs) and drives the RUNNING Agents API
+// exactly like it: POST /events {robotId: <number>, kind, seq, ts, data} with their kinds, seq 0 for broker up/down.
+// It reads GET /feed with the bridge's own parsing rule (lines starting "data:", JSON.parse(line.slice(5)),
+// act on m.robotId + m.screen) and checks every screen line we emit.
+//   happy: crash on robot 2 (Watcher) → RAJ-7 typed on robot 1 (T-Deck) claims it → recover on robot 2 → PAID on both
+//   fail:  crash on robot 2 → Watcher click claims (DEMO-1) → heartbeats only, no recover → expired after the window → BLOCKED
 import { config } from "../src/chain.js";
 import { readEnv } from "../src/env.js";
 
-const apiCfg = (config as unknown as { api: { host: string; port: number }; jobs: { claimWindowSec: number } }).api;
+const apiCfg = (config as unknown as { api: { host: string; port: number } }).api;
 const host = process.env.MONAID_API_HOST || apiCfg.host;
 const BASE = `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${process.env.MONAID_API_PORT || apiCfg.port}`;
 const TOKEN = readEnv().MONAID_API_TOKEN ?? "";
 const mode = process.argv.find((a) => ["happy", "fail", "all"].includes(a)) ?? "all";
-const withMuse = process.argv.includes("--muse");
-const withApproval = process.argv.includes("--approval") || withMuse;
 const CLAIM_WINDOW = (config as unknown as { jobs: { claimWindowSec: number } }).jobs.claimWindowSec;
-const [R1, R2] = config.robots.map((r) => r.id);
-
-let seqBase = Date.now(); // always above anything sent before
-const nextSeq = () => ++seqBase;
-const ts = () => Math.floor(Date.now() / 1000);
+const R1 = 1; // tdeck-01, as the bridge maps it (DEV_TO_ROBOT)
+const R2 = 2; // watcher-01
+const ROBOT_TO_DEV: Record<number, string> = { 1: "tdeck-01", 2: "watcher-01" }; // the bridge's reverse map
+const now = () => Math.floor(Date.now() / 1000);
+const seqs: Record<number, number> = { 1: 40, 2: 70 };
 
 async function call(method: string, path: string, body?: unknown, token = TOKEN) {
-  const res = await fetch(BASE + path, {
-    method,
-    headers: { "content-type": "application/json", "x-monaid-token": token },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  const res = await fetch(BASE + path, { method, headers: { "content-type": "application/json", "x-monaid-token": token }, body: body === undefined ? undefined : JSON.stringify(body) });
   return { status: res.status, body: (await res.json()) as Record<string, any> };
 }
+const statuses: { kind: string; status: number }[] = [];
+async function ev(robotId: number, kind: string, data: Record<string, unknown> = {}, seq?: number) {
+  const r = await call("POST", "/events", { robotId, kind, seq: seq ?? ++seqs[robotId], ts: now(), data });
+  statuses.push({ kind, status: r.status });
+  return r;
+}
+const lwt = (robotId: number, kind: "up" | "down") => ev(robotId, kind, { via: "lwt" }, 0);
+
 const show = (label: string, r: { status: number; body: Record<string, any> }) => {
   const b = r.body;
-  const extra = [b.action, b.jobId && `job ${b.jobId}`, b.worker && `worker ${b.worker}`, b.payout && `${b.payout} MON`, b.approvalId && `approval ${b.approvalId}`, b.error, b.code, b.note ?? b.message]
-    .filter(Boolean)
-    .join(" · ");
-  console.log(`→ ${label.padEnd(34)} ${r.status} ${extra}${b.tx?.link ? `\n${" ".repeat(40)}${b.tx.link}` : ""}`);
+  const extra = [b.action, b.jobId && `job ${b.jobId}`, b.worker && `worker ${b.worker}`, b.payout && `${b.payout} MON`, b.error, b.note ?? b.message].filter(Boolean).join(" · ");
+  console.log(`→ ${label.padEnd(44)} ${r.status} ${extra}${b.tx?.link ? `\n${" ".repeat(50)}${b.tx.link}` : ""}`);
   return b;
 };
-const must = (cond: unknown, what: string) => {
-  if (!cond) throw new Error(`mock-bridge: expected ${what}`);
+const results: [string, boolean][] = [];
+const check = (name: string, ok: unknown) => {
+  results.push([name, !!ok]);
+  if (!ok) console.log(`   ✖ ${name}`);
 };
 
-// ---- feed listener ----
-const feedLog: Record<string, any>[] = [];
+// ---- feed, parsed the way bridge.mjs parses it ----
+const raw: string[] = []; // every data line, verbatim
+const screens: { robotId: unknown; screen: any; at: number }[] = [];
+const events: Record<string, any>[] = [];
+let parserProblems = 0;
 async function listenFeed() {
-  const res = await fetch(`${BASE}/feed?token=${encodeURIComponent(TOKEN)}`);
-  must(res.ok && res.body, "GET /feed to open");
-  const reader = res.body!.getReader();
+  const res = await fetch(`${BASE}/feed`, { headers: { "x-monaid-token": TOKEN } });
+  if (!res.ok || !res.body) throw new Error(`feed http ${res.status}`);
+  const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = "";
   (async () => {
@@ -57,86 +61,97 @@ async function listenFeed() {
       if (done) return;
       buf += dec.decode(value, { stream: true });
       let i;
-      while ((i = buf.indexOf("\n\n")) >= 0) {
-        const chunk = buf.slice(0, i);
-        buf = buf.slice(i + 2);
-        const line = chunk.split("\n").find((l) => l.startsWith("data: "));
-        if (!line) continue;
-        const ev = JSON.parse(line.slice(6));
-        feedLog.push(ev);
-        if (ev.type === "tx" || ev.type === "hello") continue;
-        const { time: _t, type, robot, ...rest } = ev;
-        console.log(`   feed ▸ ${type}${robot ? ` (robot ${robot})` : ""} ${JSON.stringify(rest).slice(0, 160)}`);
+      while ((i = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        if (!line.startsWith("data:")) continue;
+        raw.push(line);
+        let m: any;
+        try {
+          m = JSON.parse(line.slice(5));
+        } catch {
+          parserProblems++;
+          continue;
+        }
+        events.push(m);
+        if (!m.screen) continue;
+        // bridge: const dev = ROBOT_TO_DEV[robotId]; sendState if m.screen.state; sendSay if m.screen.say
+        if (!ROBOT_TO_DEV[m.robotId as number]) parserProblems++;
+        if (m.screen.state !== undefined && (typeof m.screen.state !== "string" || m.screen.state.length > 15)) parserProblems++;
+        screens.push({ robotId: m.robotId, screen: m.screen, at: Date.now() });
+        console.log(`   screen ▸ ${ROBOT_TO_DEV[m.robotId as number] ?? m.robotId}: ${JSON.stringify(m.screen)}`);
       }
     }
   })().catch(() => undefined);
   return reader;
 }
-const waitFeed = async (pred: (e: Record<string, any>) => boolean, ms: number) => {
-  const end = Date.now() + ms;
-  while (Date.now() < end) {
-    const hit = feedLog.find(pred);
-    if (hit) return hit;
-    await new Promise((r) => setTimeout(r, 250));
+const waitFor = async <T>(fn: () => T | undefined, ms: number) => {
+  for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 100))) {
+    const v = fn();
+    if (v) return v;
   }
   return undefined;
 };
+const stateOnBoth = (state: string, since: number) =>
+  waitFor(() => {
+    const hits = [R1, R2].map((id) => screens.find((s) => s.robotId === id && s.screen.state === state && s.at >= since));
+    return hits.every(Boolean) ? Math.max(...hits.map((h) => h!.at)) : undefined;
+  }, 5000);
 
-// ---- flows ----
-async function rejections() {
-  console.log("\n== rejections (no gas) ==");
-  must(show("wrong token", await call("GET", "/robots", undefined, "x".repeat(32))).error === "UNAUTHORIZED", "401");
-  must(show("unknown robot", await call("POST", "/events", { robotId: "nope", kind: "crash", seq: nextSeq(), ts: ts() })).error === "UNKNOWN_ROBOT", "404 robot");
-  const s = nextSeq();
-  show("knob event (no core action)", await call("POST", "/events", { robotId: R1, kind: "knob", seq: s, ts: ts(), data: { value: 3 } }));
-  must(show("same seq again (replay)", await call("POST", "/events", { robotId: R1, kind: "knob", seq: s, ts: ts() })).error === "STALE_SEQ", "409 replay");
-  must(show("bad kind", await call("POST", "/events", { robotId: R1, kind: "explode", seq: nextSeq(), ts: ts() })).error === "BAD_REQUEST", "400");
+async function basics() {
+  console.log("\n== basics (no gas) ==");
+  check("401 wrong token", show("wrong token", await call("GET", "/robots", undefined, "x".repeat(32))).error === "UNAUTHORIZED");
+  show("heartbeat robot 1", await ev(R1, "heartbeat", { up: 120, n: 12 }, 12));
+  check("duplicate dropped with 200", show("same heartbeat again (QoS 1 duplicate)", await ev(R1, "heartbeat", { up: 120, n: 12 }, 12)).note?.startsWith("duplicate"));
+  show("heartbeat robot 2", await ev(R2, "heartbeat", { up: 90, n: 9 }));
+  show("knob robot 2", await ev(R2, "knob", { pos: 3 }));
+  show("up (LWT) robot 1", await lwt(R1, "up"));
+  show("power off robot 2", await ev(R2, "power", { on: false, charging: false }));
+  show("recover robot 2 (no job)", await ev(R2, "recover", { sim: true }));
+  show("click robot 2 (no job)", await ev(R2, "click"));
+  const since = Date.now();
+  show("claim typed 'MALLORY' on robot 1", await ev(R1, "claim", { text: "MALLORY" }));
+  check("UNKNOWN WORKER on robot 1's screen", await waitFor(() => screens.find((s) => s.robotId === R1 && s.screen.say === "UNKNOWN WORKER" && s.at >= since), 3000));
 }
 
 async function happy() {
-  console.log(`\n== happy path, robot ${R1}${withApproval ? " (approval beat, urgent 0.03 MON)" : ""} ==`);
-  const ev = show("crash", await call("POST", "/events", { robotId: R1, kind: "crash", seq: nextSeq(), ts: ts(), data: withApproval ? { level: "urgent" } : {} }));
-  let jobId: string = ev.jobId;
-  if (ev.action === "pending_approval") {
-    show("GET /approvals?status=pending", await call("GET", "/approvals?status=pending"));
-    if (withMuse) {
-      // WhatsApp transport stand-in: the owner forwarded the link to Muse
-      const m = await call("POST", "/muse/decide", { approvalId: ev.approvalId });
-      const muse = m.body.muse ?? {};
-      console.log(
-        `→ ${"muse decides".padEnd(34)} ${m.status} ${muse.source}${muse.choice ? ` · ${muse.choice}` : ""} · ${muse.reason ?? `${muse.fallback}: ${muse.detail}`}` +
-          (m.body.applied?.tx?.link ? `\n${" ".repeat(40)}${m.body.applied.tx.link}` : ""),
-      );
-      if (muse.source === "muse" && muse.choice === "approve" && m.body.applied?.ok) jobId = m.body.applied.jobId;
-      else if (muse.source === "muse" && muse.choice === "reject") {
-        console.log("   Muse rejected the urgent job — happy path ends here (owner can still post another).");
-        return undefined;
-      }
-    }
-    if (!jobId) {
-      const d = show("owner decides: approve", await call("POST", "/owner/decide", { approvalId: ev.approvalId, decision: "approve" }));
-      jobId = d.jobId;
-    }
-  }
-  must(jobId, "a posted job");
-  must(show("claim unknown worker", await call("POST", `/jobs/${jobId}/claim`, { worker: "mallory" })).error === "UNKNOWN_WORKER", "404 worker");
-  must(show("claim (portal) demo-1", await call("POST", `/jobs/${jobId}/claim`, { worker: "demo-1" })).ok, "claim ok");
-  const p = show("power_on (proof)", await call("POST", "/events", { robotId: R1, kind: "power_on", seq: nextSeq(), ts: ts() }));
-  must(p.action === "job_settled", "job_settled");
-  return jobId;
+  console.log("\n== happy path: crash robot 2 → claim RAJ-7 on robot 1 → recover → PAID ==");
+  let since = Date.now();
+  const p = show("crash (Watcher long-press)", await ev(R2, "crash", { sim: true }));
+  check("happy: job posted 0.01 MON", p.action === "job_posted" && p.payout === "0.01");
+  check("happy: JOB OPEN on both screens", await stateOnBoth("JOB OPEN", since));
+  check("happy: job card on screens", screens.some((s) => s.screen.cmd === "job" && s.screen.id === Number(p.jobId) && s.screen.payout === "0.01 MON"));
+  show("down (LWT) robot 2 while job open", await lwt(R2, "down")); // must be ignored: the job already exists
+  since = Date.now();
+  const c = show("claim typed 'RAJ-7' on robot 1 (T-Deck)", await ev(R1, "claim", { text: "RAJ-7" }));
+  check("happy: claim went to robot 2's job", c.action === "claim_accepted" && c.jobId === p.jobId);
+  check("happy: CLAIMED on both screens", await stateOnBoth("CLAIMED", since));
+  show("heartbeat robot 2 (not a proof for a crash)", await ev(R2, "heartbeat", { up: 95, n: 10 }));
+  since = Date.now();
+  const r = show("recover (Watcher release)", await ev(R2, "recover", { sim: true }));
+  const paidAt = await stateOnBoth("PAID", since);
+  check("happy: settled", r.action === "job_settled");
+  check("happy: PAID on both screens", paidAt);
+  check("happy: say line on paid", screens.some((s) => s.at >= since && typeof s.screen.say === "string" && s.screen.say.startsWith("paid")));
+  if (paidAt) console.log(`✔ recover → PAID on both screens: ${paidAt - since} ms`);
+  return paidAt ? paidAt - since : undefined;
 }
 
 async function fail() {
-  console.log(`\n== fail path, robot ${R2} (claim window ${CLAIM_WINDOW} s) ==`);
-  const ev = show("crash", await call("POST", "/events", { robotId: R2, kind: "crash", seq: nextSeq(), ts: ts() }));
-  must(ev.action === "job_posted", "job_posted");
-  must(show("claim event demo-2", await call("POST", "/events", { robotId: R2, kind: "claim", seq: nextSeq(), ts: ts(), data: { worker: "demo-2" } })).action === "claim_accepted", "claim_accepted");
-  show("power_off (not a proof)", await call("POST", "/events", { robotId: R2, kind: "power_off", seq: nextSeq(), ts: ts() }));
-  console.log(`   … no fix. Waiting for the claim window to pass and the agent to expire job ${ev.jobId}`);
-  const ex = await waitFeed((e) => e.type === "job_expired" && e.jobId === ev.jobId, (CLAIM_WINDOW + 30) * 1000);
-  must(ex, "job_expired on the feed");
-  console.log(`✔ job ${ev.jobId} expired, escrow back to robot ${R2}: ${ex!.link}`);
-  return ev.jobId as string;
+  console.log(`\n== fail path: crash robot 2 → claim → no recover → expire after ${CLAIM_WINDOW} s → BLOCKED ==`);
+  let since = Date.now();
+  const p = show("crash (Watcher long-press)", await ev(R2, "crash", { sim: true }));
+  check("fail: job posted", p.action === "job_posted");
+  check("fail: claim by Watcher click", show("click (worker confirm → DEMO-1)", await ev(R2, "click")).action === "claim_accepted");
+  console.log(`   … heartbeats only, no recover. Waiting for job ${p.jobId} to expire`);
+  since = Date.now();
+  const hb = setInterval(() => void ev(R2, "heartbeat", { up: 200, n: ++seqs[R2] }).catch(() => undefined), 10_000);
+  const blockedAt = await waitFor(() => screens.find((s) => s.robotId === R2 && s.screen.state === "BLOCKED" && s.at >= since)?.at, (CLAIM_WINDOW + 30) * 1000);
+  clearInterval(hb);
+  const ex = events.find((e) => e.type === "job_expired" && e.jobId === p.jobId);
+  check("fail: expired", ex);
+  check("fail: BLOCKED on both screens", blockedAt && (await stateOnBoth("BLOCKED", since)));
+  if (ex) console.log(`✔ job ${p.jobId} expired ${Math.round((blockedAt! - since) / 1000)} s after the claim: ${ex.link}`);
 }
 
 const health = await fetch(BASE + "/health").then((r) => r.json()).catch(() => null);
@@ -145,13 +160,22 @@ if (!health?.ok) {
   process.exit(1);
 }
 const reader = await listenFeed();
-await rejections();
-if (mode !== "fail") await happy();
+await basics();
+let paidMs: number | undefined;
+if (mode !== "fail") paidMs = await happy();
 if (mode !== "happy") await fail();
-show("GET /robots", await call("GET", "/robots"));
-const jobs = (await call("GET", "/jobs")).body.jobs as { jobId: string; robotId: string; status: string; payout: string; worker?: string }[];
-console.log("\nlatest jobs:", jobs.slice(0, 4).map((j) => `#${j.jobId} r${j.robotId} ${j.status} ${j.payout} MON ${j.worker ?? ""}`).join(" | "));
-// The mock uses millisecond timestamps as seq; reset so real devices can count from 0 again.
-show("POST /admin/reset-seq", await call("POST", "/admin/reset-seq", {}));
+await new Promise((r) => setTimeout(r, 500));
 await reader.cancel();
-console.log("\nmock bridge: done ✔");
+
+const kinds = new Set(statuses.map((s) => s.kind));
+const non200 = statuses.filter((s) => s.status !== 200);
+check(`every event got 200 (${statuses.length} events)`, non200.length === 0);
+check(`all 9 bridge kinds sent (${[...kinds].join(", ")})`, ["heartbeat", "down", "up", "crash", "recover", "click", "knob", "claim", "power"].every((k) => kinds.has(k)));
+check("bridge parser accepts every screen line", parserProblems === 0 && screens.length > 0);
+check('no "Muse" anywhere on the feed', !raw.some((l) => /muse/i.test(l)));
+const forwarded = screens.filter((s) => s.screen.state || s.screen.say).length;
+console.log(`\nfeed: ${raw.length} lines, ${screens.length} screen lines (${forwarded} forwarded by today's bridge; ${screens.length - forwarded} job cards need a cmd:"job" branch)`);
+if (non200.length) console.log("non-200:", JSON.stringify(non200));
+const failed = results.filter(([, ok]) => !ok);
+console.log(`RESULT ${failed.length ? "FAIL" : "PASS"}: ${results.length - failed.length}/${results.length} checks${failed.length ? " — " + failed.map(([n]) => n).join("; ") : ""}${paidMs !== undefined ? ` · recover→PAID ${paidMs} ms` : ""}`);
+if (failed.length) process.exitCode = 1;
