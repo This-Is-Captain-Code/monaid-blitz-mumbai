@@ -8,7 +8,10 @@
     "wallets": "tsx scripts/wallets.ts",
     "register:robots": "tsx scripts/register-robots.ts",
     "fund:robot": "tsx scripts/fund-robot.ts",
-    "topup:agents": "tsx scripts/topup-agents.ts"
+    "topup:agents": "tsx scripts/topup-agents.ts",
+    "demo:pay": "tsx scripts/demo-pay.ts",
+    "proof:sendtx": "tsx scripts/nonce-proof.ts",
+    "test": "tsx --test test/tx.test.ts"
   },
   "dependencies": {
     "dotenv": "^18.0.9",

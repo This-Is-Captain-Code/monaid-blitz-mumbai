@@ -1,10 +1,10 @@
 // npm run topup:agents [-- --dry-run]
 // DEPLOYER refills agent wallets that are below the gas floor up to the target, within a daily cap.
-// Every send checks the DEPLOYER floor first; stops (and prints DEPLOYER's address) if it can't.
-import { formatEther } from "viem";
+// Sends via sendTx, which checks the DEPLOYER floor first; stops (and prints DEPLOYER's address) if it can't.
 import { account, hasWallet } from "../src/env.js";
 import { FLOORS, config, publicClient } from "../src/chain.js";
-import { FloorError, assertDeployerCanSpend, mon, recordTopup, sendSimple, toppedUpToday, withMargin } from "../src/funding.js";
+import { FloorError, assertDeployerCanSpend, mon, recordTopup, toppedUpToday } from "../src/funding.js";
+import { describe, sendTx } from "../src/tx.js";
 
 const dryRun = process.argv.includes("--dry-run");
 let capLeft = FLOORS.agentDailyCap - toppedUpToday();
@@ -15,7 +15,7 @@ console.log(
 
 let sent = 0n;
 try {
-  for (const { agent: name } of config.robots) {
+  for (const { id, agent: name } of config.robots) {
     if (!hasWallet(name)) {
       console.log(`• ${name}: no wallet in agents/.env — skipped`);
       continue;
@@ -26,21 +26,28 @@ try {
       console.log(`• ${name} ${to}: ${mon(balance)} ≥ floor — ok`);
       continue;
     }
-    let amount = FLOORS.agentTarget - balance;
     if (capLeft <= 0n) {
       console.log(`✖ ${name} ${to}: ${mon(balance)} below floor, but daily top-up cap is used up — skipped`);
       continue;
     }
+    let amount = FLOORS.agentTarget - balance;
     if (amount > capLeft) amount = capLeft;
 
-    const gas = withMargin(await publicClient.estimateGas({ account: account("DEPLOYER"), to, value: amount }));
-    await assertDeployerCanSpend(amount, gas, `topping up ${name} with ${Number(formatEther(amount)).toFixed(4)} MON`);
     if (dryRun) {
+      await assertDeployerCanSpend(amount, 25_000n, `topping up ${name} with ${mon(amount)}`);
       console.log(`→ ${name} ${to}: would send ${mon(amount)} (${mon(balance)} → ${mon(balance + amount)})`);
       continue;
     }
-    const { hash } = await sendSimple("DEPLOYER", `top up ${name} with ${mon(amount)}`, { to, value: amount }, { gas });
-    recordTopup({ wallet: name, address: to, amountWei: amount, hash });
+    const res = await sendTx({
+      wallet: "DEPLOYER",
+      robot: id,
+      action: "topup",
+      reason: `${name} below ${mon(FLOORS.agentGas)} gas floor`,
+      to,
+      value: amount,
+    });
+    console.log(describe(res, `top up ${name} with ${mon(amount)}`));
+    recordTopup({ wallet: name, address: to, amountWei: amount, hash: res.hash });
     capLeft -= amount;
     sent += amount;
   }

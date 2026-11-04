@@ -1,9 +1,9 @@
 // npm run fund:robot -- <robotId> <amountMON>
-// DEPLOYER funds a robot's balance inside MonaidCore. Refuses if DEPLOYER would drop below its floor.
-import { encodeFunctionData, formatEther, parseEther, zeroAddress, type Address } from "viem";
-import { account } from "../src/env.js";
+// DEPLOYER funds a robot's balance inside MonaidCore via sendTx (which enforces the DEPLOYER floor).
+import { formatEther, parseEther, zeroAddress, type Address } from "viem";
 import { CORE_ABI, CORE_ADDRESS, publicClient, robotConfig } from "../src/chain.js";
-import { FloorError, assertDeployerCanSpend, sendSimple, withMargin } from "../src/funding.js";
+import { FloorError } from "../src/funding.js";
+import { TxRevertedError, describe, sendTx } from "../src/tx.js";
 
 const [robotId, amountArg] = process.argv.slice(2);
 if (!robotId || !amountArg) {
@@ -24,11 +24,18 @@ try {
   })) as Address;
   if (agentOf === zeroAddress) throw new Error(`Robot ${robotId} is not registered — run npm run register:robots`);
 
-  const data = encodeFunctionData({ abi: CORE_ABI, functionName: "fund", args: [robot.address] });
-  const gas = withMargin(await publicClient.estimateGas({ account: account("DEPLOYER"), to: CORE_ADDRESS, data, value }));
-  await assertDeployerCanSpend(value, gas, `funding robot ${robotId} with ${amountArg} MON`);
-
-  await sendSimple("DEPLOYER", `fund robot ${robotId} with ${amountArg} MON`, { to: CORE_ADDRESS, data, value }, { gas });
+  const res = await sendTx({
+    wallet: "DEPLOYER",
+    robot: robotId,
+    action: "fund",
+    reason: `fund robot ${robotId} with ${amountArg} MON`,
+    to: CORE_ADDRESS,
+    abi: CORE_ABI,
+    functionName: "fund",
+    args: [robot.address],
+    value,
+  });
+  console.log(describe(res, `fund robot ${robotId} with ${amountArg} MON`));
   const bal = (await publicClient.readContract({
     address: CORE_ADDRESS,
     abi: CORE_ABI,
@@ -37,6 +44,8 @@ try {
   })) as bigint;
   console.log(`Robot ${robotId} balance in MonaidCore: ${formatEther(bal)} MON`);
 } catch (e) {
-  console.error(e instanceof FloorError ? e.message : `Error: ${(e as Error).message}`);
+  if (e instanceof FloorError) console.error(e.message);
+  else if (e instanceof TxRevertedError) console.error(`Reverted (${e.stage}): ${e.message}`);
+  else console.error(`Error: ${(e as Error).message}`);
   process.exitCode = 1;
 }

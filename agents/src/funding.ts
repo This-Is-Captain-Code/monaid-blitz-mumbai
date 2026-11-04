@@ -1,18 +1,23 @@
-// DEPLOYER value sends (fund a robot, top up agents). Every one goes through assertDeployerCanSpend first.
-// (P3 replaces sendSimple with the shared sendTx queue.)
+// Funding rules: DEPLOYER hard floor and the daily agent top-up ledger.
+// Sending itself goes through sendTx (src/tx.ts), which calls assertDeployerCanSpend on every DEPLOYER value send.
 import { appendFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { formatEther, type Address, type Hash } from "viem";
+import { formatEther } from "viem";
 import { AGENTS_DIR, account } from "./env.js";
-import { FLOORS, publicClient, txLink, walletClient } from "./chain.js";
+import { FLOORS, publicClient } from "./chain.js";
 
-export class FloorError extends Error {}
+export class FloorError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FloorError";
+  }
+}
 
-const mon = (wei: bigint) => `${Number(formatEther(wei)).toFixed(4)} MON`;
+export const mon = (wei: bigint) => `${Number(formatEther(wei)).toFixed(4)} MON`;
 
 /**
  * Refuses unless DEPLOYER keeps >= the hard floor after `value` + worst-case gas (gas limit × max fee).
- * Message says how much it can still spend.
+ * The message says how much it can still spend and where to send MON by hand.
  */
 export async function assertDeployerCanSpend(value: bigint, gasLimit: bigint, what: string) {
   const deployer = account("DEPLOYER").address;
@@ -29,25 +34,6 @@ export async function assertDeployerCanSpend(value: bigint, gasLimit: bigint, wh
   }
   return { balance, gasCost, after };
 }
-
-/** Estimate +15% (Monad charges the gas limit), send, wait, print hash + link. */
-export async function sendSimple(
-  wallet: string,
-  label: string,
-  tx: { to: Address; value?: bigint; data?: `0x${string}` },
-  prepared?: { gas: bigint },
-): Promise<{ hash: Hash; fee: bigint }> {
-  const client = walletClient(wallet);
-  const gas = prepared?.gas ?? withMargin(await publicClient.estimateGas({ account: client.account, ...tx }));
-  const hash = await client.sendTransaction({ ...tx, gas });
-  const r = await publicClient.waitForTransactionReceipt({ hash });
-  const fee = gas * r.effectiveGasPrice;
-  if (r.status !== "success") throw new Error(`${label} reverted: ${txLink(hash)}`);
-  console.log(`✔ ${label}\n    ${txLink(hash)}\n    fee ${formatEther(fee)} MON`);
-  return { hash, fee };
-}
-
-export const withMargin = (est: bigint) => (est * 115n) / 100n;
 
 // ---- daily top-up ledger (agents/logs/topups.jsonl) ----
 const LEDGER = join(AGENTS_DIR, "logs", "topups.jsonl");
@@ -71,5 +57,3 @@ export function recordTopup(e: { wallet: string; address: string; amountWei: big
     JSON.stringify({ ts: new Date().toISOString(), day: utcDay(), ...e, amountWei: e.amountWei.toString() }) + "\n",
   );
 }
-
-export { mon };
