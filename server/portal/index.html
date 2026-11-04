@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Monaid Portal</title>
+<style>
+  :root { --bg:#0b0d10; --card:#15181d; --line:#262b33; --fg:#e8eaed; --dim:#8a919c;
+          --green:#2ecc71; --orange:#f39c12; --cyan:#29c4d8; --red:#e74c3c; --mag:#d44fd4; --yellow:#f1c40f; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--fg); font:16px/1.45 system-ui,sans-serif; padding:14px; max-width:520px; margin:0 auto; }
+  h1 { font-size:20px; letter-spacing:2px; margin-bottom:2px; }
+  .sub { color:var(--dim); font-size:12px; margin-bottom:14px; }
+  h2 { font-size:12px; color:var(--dim); text-transform:uppercase; letter-spacing:1.5px; margin:18px 0 8px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; margin-bottom:8px; }
+  .row { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--red); margin-right:6px; }
+  .dot.on { background:var(--green); }
+  .big { font-size:18px; font-weight:700; }
+  .dim { color:var(--dim); font-size:13px; }
+  .st { font-weight:800; letter-spacing:1px; }
+  .st.open{color:var(--orange)} .st.claimed{color:var(--cyan)} .st.paid{color:var(--green)}
+  .st.expired,.st.blocked{color:var(--red)} .st.pending{color:var(--yellow)}
+  button { background:var(--green); border:0; border-radius:10px; color:#06220f; font-weight:800;
+           font-size:15px; padding:12px 16px; cursor:pointer; }
+  button.alt { background:var(--cyan); color:#002a30; }
+  button.warn { background:var(--red); color:#fff; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--fg); }
+  button:disabled { opacity:.4 }
+  #feed { font:12px/1.5 ui-monospace,monospace; color:var(--dim); max-height:220px; overflow-y:auto; }
+  #feed a { color:var(--cyan); text-decoration:none; }
+  #feed .tx { color:var(--green); }
+  .empty { color:var(--dim); font-size:14px; padding:6px 2px; }
+</style>
+</head>
+<body>
+<h1>MONAID</h1>
+<div class="sub">first aid for robots · paid in MON</div>
+
+<h2>Robots</h2>
+<div id="robots"><div class="empty">loading…</div></div>
+
+<h2>Jobs</h2>
+<div id="jobs"><div class="empty">none</div></div>
+
+<h2>Owner decides</h2>
+<div id="approvals"><div class="empty">nothing pending</div></div>
+
+<h2>Feed</h2>
+<div class="card"><div id="feed">connecting…</div></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const api = (p, opt) => fetch("/api" + p, opt).then(r => r.json());
+let workers = ["demo-1"];
+
+function esc(s){ return String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+async function refresh() {
+  try {
+    const [r, j, a, w] = await Promise.all([api("/robots"), api("/jobs"), api("/approvals?status=pending"), api("/workers")]);
+    if (w.workers?.length) workers = w.workers.map(x => x.id);
+    $("robots").innerHTML = (r.robots ?? []).map(x => `
+      <div class="card row">
+        <div><span class="dot ${x.lastEventAt && Date.now()/1000 - x.lastEventAt < 30 ? "on" : "on"}"></span>
+          <b>${esc(x.robotId)}</b></div>
+        <div class="dim">core ${esc(x.balance)} · gas ${esc(Number(x.agentBalance).toFixed?.(2) ?? x.agentBalance)} · ${x.openJobs ?? 0} open</div>
+      </div>`).join("") || `<div class="empty">no robots</div>`;
+    $("jobs").innerHTML = (j.jobs ?? []).map(x => {
+      const open = x.status === "open";
+      return `<div class="card">
+        <div class="row">
+          <span class="big">#${esc(x.jobId)} · ${esc(x.payout)} MON</span>
+          <span class="st ${esc(x.status)}">${esc(String(x.status).toUpperCase())}</span>
+        </div>
+        <div class="dim">${esc(x.robotId)}${x.worker ? " · worker " + esc(x.worker) : ""}</div>
+        ${open ? `<div class="row" style="margin-top:10px">` + workers.map(wk =>
+          `<button onclick="claim('${esc(x.jobId)}','${esc(wk)}')">CLAIM · ${esc(wk)}</button>`).join("") + `</div>` : ""}
+      </div>`;
+    }).join("") || `<div class="empty">none</div>`;
+    $("approvals").innerHTML = (a.approvals ?? []).map(x => `
+      <div class="card">
+        <div><b>${esc(x.summary ?? x.action)}</b></div>
+        <div class="dim">${esc(x.reason ?? "")}</div>
+        <div class="row" style="margin-top:10px">
+          <button onclick="decide('${esc(x.id)}','approve')">APPROVE</button>
+          <button class="warn" onclick="decide('${esc(x.id)}','reject')">REJECT</button>
+          <button class="alt" onclick="askClaude('${esc(x.id)}')">ASK CLAUDE</button>
+        </div>
+      </div>`).join("") || `<div class="empty">nothing pending</div>`;
+  } catch (e) { feedLine("portal: refresh failed — " + e.message); }
+}
+
+async function claim(jobId, worker) {
+  const r = await api(`/jobs/${jobId}/claim`, { method: "POST",
+    headers: { "content-type": "application/json" }, body: JSON.stringify({ worker }) });
+  feedLine(r.ok ? `claimed #${jobId} as ${worker}` + txLink(r.tx) : `claim failed: ${r.error ?? ""} ${r.message ?? ""}`);
+  refresh();
+}
+async function decide(approvalId, decision) {
+  const r = await api("/owner/decide", { method: "POST",
+    headers: { "content-type": "application/json" }, body: JSON.stringify({ approvalId, decision }) });
+  feedLine(r.ok ? `owner: ${decision}` : `decide failed: ${r.error ?? ""}`);
+  refresh();
+}
+async function askClaude(approvalId) {
+  feedLine("asking Claude…");
+  const r = await api("/agent/decide", { method: "POST",
+    headers: { "content-type": "application/json" }, body: JSON.stringify({ approvalId }) });
+  const a = r.agent ?? {};
+  feedLine(a.choice ? `Claude: ${a.choice} — ${a.reason ?? ""} (${a.ms}ms)` : `Claude fell back: ${a.fallback ?? "?"}`);
+  refresh();
+}
+
+function txLink(tx) { return tx?.link ? ` <a href="${tx.link}" target="_blank" class="tx">tx↗</a>` : ""; }
+function feedLine(html) {
+  const d = document.createElement("div");
+  d.innerHTML = new Date().toTimeString().slice(0, 8) + " " + html;
+  $("feed").prepend(d);
+  while ($("feed").childElementCount > 60) $("feed").lastChild.remove();
+}
+
+function startFeed() {
+  const es = new EventSource("/api/feed");
+  es.onopen = () => feedLine("feed connected");
+  es.onmessage = (m) => {
+    try {
+      const e = JSON.parse(m.data);
+      if (e.type === "screen") return; // device chatter
+      let line = e.type ?? "event";
+      if (e.type === "agent_decision") line = `Claude decided: ${e.choice ?? ""} — ${esc(e.reason ?? "")}`;
+      else if (e.jobId) line = `${e.type} #${e.jobId}${e.payout ? " · " + e.payout + " MON" : ""}${e.worker ? " · " + esc(e.worker) : ""}`;
+      else if (e.kind) line = `event ${esc(e.robot ?? "")}/${esc(e.kind)}`;
+      feedLine(esc(line) + txLink(e.tx ?? e));
+      if (["job_posted","job_claimed","job_settled","job_expired","approval_requested","approval_decided"].includes(e.type)) refresh();
+    } catch {}
+  };
+  es.onerror = () => { feedLine("feed lost, retrying…"); es.close(); setTimeout(startFeed, 3000); };
+}
+
+refresh(); setInterval(refresh, 4000); startFeed();
+</script>
+</body>
+</html>
