@@ -1,12 +1,28 @@
 [
   {
-    "inputs": [],
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "_maxPayout",
+        "type": "uint256"
+      }
+    ],
     "stateMutability": "nonpayable",
     "type": "constructor"
   },
   {
     "inputs": [],
-    "name": "ContractPaused",
+    "name": "AlreadySettled",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ClaimExpired",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ClaimNotExpired",
     "type": "error"
   },
   {
@@ -27,12 +43,48 @@
   },
   {
     "inputs": [],
-    "name": "NotAgent",
+    "name": "JobNotClaimed",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "JobNotFound",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "JobNotOpen",
     "type": "error"
   },
   {
     "inputs": [],
     "name": "NotOwner",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotRobotAgent",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "Paused",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "payout",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "maxPayout",
+        "type": "uint256"
+      }
+    ],
+    "name": "PayoutTooHigh",
     "type": "error"
   },
   {
@@ -66,6 +118,11 @@
     "type": "error"
   },
   {
+    "inputs": [],
+    "name": "ZeroWindow",
+    "type": "error"
+  },
+  {
     "anonymous": false,
     "inputs": [
       {
@@ -88,6 +145,144 @@
       }
     ],
     "name": "Funded",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "jobId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "refunded",
+        "type": "uint256"
+      }
+    ],
+    "name": "JobCancelled",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "jobId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "worker",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint64",
+        "name": "deadline",
+        "type": "uint64"
+      }
+    ],
+    "name": "JobClaimed",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "jobId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "worker",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "refunded",
+        "type": "uint256"
+      }
+    ],
+    "name": "JobExpired",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "jobId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "robot",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "payout",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint64",
+        "name": "claimWindow",
+        "type": "uint64"
+      }
+    ],
+    "name": "JobPosted",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "jobId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "worker",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "payout",
+        "type": "uint256"
+      }
+    ],
+    "name": "JobSettled",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "maxPayout",
+        "type": "uint256"
+      }
+    ],
+    "name": "MaxPayoutChanged",
     "type": "event"
   },
   {
@@ -119,13 +314,19 @@
     "anonymous": false,
     "inputs": [
       {
+        "indexed": false,
+        "internalType": "bool",
+        "name": "paused",
+        "type": "bool"
+      },
+      {
         "indexed": true,
         "internalType": "address",
         "name": "by",
         "type": "address"
       }
     ],
-    "name": "Paused",
+    "name": "PauseChanged",
     "type": "event"
   },
   {
@@ -145,19 +346,6 @@
       }
     ],
     "name": "RobotRegistered",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "by",
-        "type": "address"
-      }
-    ],
-    "name": "Unpaused",
     "type": "event"
   },
   {
@@ -201,6 +389,88 @@
   {
     "inputs": [
       {
+        "internalType": "uint256",
+        "name": "jobId",
+        "type": "uint256"
+      }
+    ],
+    "name": "cancel",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "jobId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "worker",
+        "type": "address"
+      }
+    ],
+    "name": "claim",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "jobId",
+        "type": "uint256"
+      }
+    ],
+    "name": "claimDeadline",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "robot",
+        "type": "address"
+      }
+    ],
+    "name": "escrowOf",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "jobId",
+        "type": "uint256"
+      }
+    ],
+    "name": "expire",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
         "internalType": "address",
         "name": "robot",
         "type": "address"
@@ -209,6 +479,83 @@
     "name": "fund",
     "outputs": [],
     "stateMutability": "payable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "jobId",
+        "type": "uint256"
+      }
+    ],
+    "name": "getJob",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "address",
+            "name": "robot",
+            "type": "address"
+          },
+          {
+            "internalType": "uint64",
+            "name": "claimWindow",
+            "type": "uint64"
+          },
+          {
+            "internalType": "uint64",
+            "name": "claimedAt",
+            "type": "uint64"
+          },
+          {
+            "internalType": "enum MonaidCore.Status",
+            "name": "status",
+            "type": "uint8"
+          },
+          {
+            "internalType": "address",
+            "name": "worker",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "payout",
+            "type": "uint256"
+          }
+        ],
+        "internalType": "struct MonaidCore.Job",
+        "name": "",
+        "type": "tuple"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "jobCount",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "maxPayout",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -252,7 +599,7 @@
         "type": "address"
       },
       {
-        "internalType": "address payable",
+        "internalType": "address",
         "name": "to",
         "type": "address"
       },
@@ -275,12 +622,67 @@
         "type": "address"
       },
       {
+        "internalType": "uint256",
+        "name": "payout",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint64",
+        "name": "claimWindow",
+        "type": "uint64"
+      }
+    ],
+    "name": "postJob",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "jobId",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "robot",
+        "type": "address"
+      },
+      {
         "internalType": "address",
         "name": "agent",
         "type": "address"
       }
     ],
     "name": "registerRobot",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "_maxPayout",
+        "type": "uint256"
+      }
+    ],
+    "name": "setMaxPayout",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "jobId",
+        "type": "uint256"
+      }
+    ],
+    "name": "settle",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"

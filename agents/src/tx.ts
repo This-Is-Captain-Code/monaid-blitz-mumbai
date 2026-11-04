@@ -24,6 +24,18 @@ import {
 import { AGENTS_DIR } from "./env.js";
 import { CORE_ABI, RECEIPT_POLL_MS, publicClient, txLink, walletClient } from "./chain.js";
 import { FloorError, assertDeployerCanSpend } from "./funding.js";
+import { getFees } from "./fees.js";
+import { config } from "./chain.js";
+
+/** sendTx tuning from agents/config.json → tx. */
+export const TX_CFG = {
+  separateSimulate: false,
+  fixedGasPreflight: true,
+  fixedGas: {} as Record<string, number>,
+  ...((config as { tx?: object }).tx ?? {}),
+  // MONAID_TX_LEGACY=1 → the pre-latency-pass path (separate simulate, fresh fees, always estimate). For timing only.
+  ...(process.env.MONAID_TX_LEGACY === "1" ? { separateSimulate: true, fixedGas: {}, feeRefreshMs: 0 } : {}),
+} as { separateSimulate: boolean; fixedGasPreflight: boolean; fixedGas: Record<string, number>; feeRefreshMs?: number; _fixedGasNote?: string };
 
 const audited = new WeakSet<object>(); // errors already written to the audit log
 
@@ -54,6 +66,7 @@ export type TxResult = {
   fee: bigint;
   receipt: TransactionReceipt;
   confirmMs: number; // send accepted by RPC → receipt seen
+  totalMs: number; // sendTx started (after queue) → receipt seen
 };
 
 /** A revert decoded into a readable custom error. Never retried. */
@@ -133,6 +146,12 @@ export function isNetworkError(err: unknown): boolean {
 
 const isNonceTooLow = (err: unknown) => /nonce too low|already known|known transaction/i.test(String((err as Error)?.message ?? err));
 
+/** Out-of-gas, as opposed to a revert: no revert data and an out-of-gas style message. */
+export function isOutOfGas(err: unknown): boolean {
+  if (!err || revertData(err)) return false;
+  return /out of gas|gas required exceeds|intrinsic gas too low|OutOfGas/i.test(String((err as Error)?.message ?? err));
+}
+
 async function withNetworkRetry<T>(what: string, fn: () => Promise<T>): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -184,7 +203,8 @@ export function sendTx(req: TxRequest): Promise<TxResult> {
   return enqueue(req.wallet, () => sendNow(req));
 }
 
-async function sendNow(req: TxRequest): Promise<TxResult> {
+async function sendNow(req: TxRequest, opts: { forceEstimate?: boolean } = {}): Promise<TxResult> {
+  const startedAt = performance.now();
   const client = walletClient(req.wallet);
   const from = client.account.address;
   const value = req.value ?? 0n;
@@ -199,6 +219,15 @@ async function sendNow(req: TxRequest): Promise<TxResult> {
     args: req.args ?? [],
     value: formatEther(value),
     reason: req.reason ?? null,
+  };
+
+  const logOutOfGas = (stage: "preflight" | "onchain", gas: bigint, hash?: Hash, fee?: bigint) => {
+    const msg =
+      `OUT OF GAS: fixed gas limit ${gas} for "${req.action}" is too small (${stage}` +
+      `${hash ? `, ${fee ? formatEther(fee) + " MON spent, " : ""}${txLink(hash)}` : ", nothing sent"}). ` +
+      `Retrying once with estimation — raise tx.fixedGas.${req.action} in agents/config.json.`;
+    console.warn(`⚠ ${msg}`);
+    audit({ ...base, result: "out-of-gas", stage, gas: gas.toString(), hash: hash ?? null, link: hash ? txLink(hash) : null, fee: fee ? formatEther(fee) : null, retry: "estimate" });
   };
 
   const fail = (stage: TxRevertedError["stage"], err: unknown, hash?: Hash): never => {
@@ -217,29 +246,49 @@ async function sendNow(req: TxRequest): Promise<TxResult> {
     // 0. DEPLOYER hard floor, checked before anything else (re-checked with real gas after estimate)
     if (req.wallet === "DEPLOYER" && value > 0n) await assertDeployerCanSpend(value, 0n, `${req.action} (${formatEther(value)} MON)`);
 
-    // 1. simulate
-    try {
-      await withNetworkRetry("simulate", () => publicClient.call({ account: from, to: req.to, data, value }));
-    } catch (e) {
-      if (isNetworkError(e)) throw e;
-      fail("simulate", e);
-    }
+    const simulate = async () => {
+      try {
+        await withNetworkRetry("simulate", () => publicClient.call({ account: from, to: req.to, data, value }));
+      } catch (e) {
+        if (isNetworkError(e)) throw e;
+        fail("simulate", e);
+      }
+    };
 
-    // 2. estimate +15%
-    let gas: bigint;
-    try {
-      const est = await withNetworkRetry("estimateGas", () => publicClient.estimateGas({ account: from, to: req.to, data, value }));
-      gas = (est * (100n + GAS_MARGIN_PCT)) / 100n;
-    } catch (e) {
-      if (isNetworkError(e)) throw e;
-      return fail("estimate", e);
+    // 1. gas: a fixed per-action limit from config, or estimate +15% (estimation reverts with the same custom
+    //    error as a simulation, so it doubles as the pre-check; a separate simulate is optional).
+    let gas: bigint | undefined;
+    const fixed = opts.forceEstimate ? undefined : TX_CFG.fixedGas[req.action];
+    if (fixed) {
+      gas = BigInt(fixed);
+      if (TX_CFG.fixedGasPreflight) {
+        // Simulate WITH the fixed limit, so a too-small limit shows up here (no gas spent), not on-chain.
+        try {
+          await withNetworkRetry("simulate", () => publicClient.call({ account: from, to: req.to, data, value, gas }));
+        } catch (e) {
+          if (isNetworkError(e)) throw e;
+          if (!isOutOfGas(e)) fail("simulate", e);
+          logOutOfGas("preflight", gas);
+          gas = undefined; // fall through to estimation below
+        }
+      }
+    }
+    if (gas === undefined) {
+      if (TX_CFG.separateSimulate) await simulate();
+      try {
+        const est = await withNetworkRetry("estimateGas", () => publicClient.estimateGas({ account: from, to: req.to, data, value }));
+        gas = (est * (100n + GAS_MARGIN_PCT)) / 100n;
+      } catch (e) {
+        if (isNetworkError(e)) throw e;
+        return fail("estimate", e);
+      }
     }
 
     // DEPLOYER hard floor on every value send
     if (req.wallet === "DEPLOYER" && value > 0n) await assertDeployerCanSpend(value, gas, `${req.action} (${formatEther(value)} MON)`);
 
-    // 3. sign with our local nonce, 4. send (retry = resend the same raw tx), 5. wait
-    const fees = await withNetworkRetry("fees", () => publicClient.estimateFeesPerGas());
+    // 2. sign with our local nonce + cached fees, 3. send (retry = resend the same raw tx), 4. wait
+    const fees = await withNetworkRetry("fees", () => getFees());
     for (let nonceAttempt = 0; ; nonceAttempt++) {
       const nonce = await nextNonce(req.wallet, from, nonceAttempt > 0);
       const raw = await client.signTransaction({
@@ -274,17 +323,25 @@ async function sendNow(req: TxRequest): Promise<TxResult> {
       const confirmMs = Math.round(performance.now() - sentAt);
       const fee = gas * receipt.effectiveGasPrice;
       if (receipt.status !== "success") {
-        // replay to recover the custom error name
+        // replay without a gas limit to recover the custom error name
         let decoded: unknown;
+        let replayOk = false;
         try {
           await publicClient.call({ account: from, to: req.to, data, value, blockNumber: receipt.blockNumber });
+          replayOk = true;
         } catch (e) {
           decoded = e;
         }
+        // Fixed limit too small: the same call succeeds with enough gas → out-of-gas. Retry ONCE with estimation.
+        if (fixed && !opts.forceEstimate && (replayOk || isOutOfGas(decoded))) {
+          logOutOfGas("onchain", gas, hash, fee);
+          return sendNow(req, { forceEstimate: true });
+        }
         return fail("onchain", decoded ?? new Error("execution reverted"), hash);
       }
-      audit({ ...base, result: "success", hash, link: txLink(hash), nonce, gas: gas.toString(), fee: formatEther(fee), block: receipt.blockNumber, confirmMs });
-      return { hash, link: txLink(hash), nonce, gas, fee, receipt, confirmMs };
+      const totalMs = Math.round(performance.now() - startedAt);
+      audit({ ...base, result: "success", hash, link: txLink(hash), nonce, gas: gas.toString(), gasUsed: receipt.gasUsed, fee: formatEther(fee), block: receipt.blockNumber, confirmMs, totalMs });
+      return { hash, link: txLink(hash), nonce, gas, fee, receipt, confirmMs, totalMs };
     }
   } catch (e) {
     if (e instanceof TxRevertedError) throw e;

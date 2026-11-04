@@ -22,5 +22,16 @@
     "agentGasFloorMon": "1",
     "agentTopupTargetMon": "3",
     "agentTopupDailyCapMon": "10"
+  },
+  "tx": {
+    "separateSimulate": false,
+    "feeRefreshMs": 3000,
+    "fixedGasPreflight": true,
+    "fixedGas": {
+      "postJob": 174700,
+      "claim": 55900,
+      "settle": 114100
+    },
+    "_fixedGasNote": "measured on v1 2026-11-04 via eth_estimateGas: postJob max 166377 (first job), claim 53165, settle 108634 (fresh worker); +5%"
   }
 }

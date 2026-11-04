@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { formatEther } from "viem";
 import { AGENTS_DIR, account } from "./env.js";
 import { FLOORS, publicClient } from "./chain.js";
+import { getFees } from "./fees.js";
 
 export class FloorError extends Error {
   constructor(message: string) {
@@ -21,7 +22,7 @@ export const mon = (wei: bigint) => `${Number(formatEther(wei)).toFixed(4)} MON`
  */
 export async function assertDeployerCanSpend(value: bigint, gasLimit: bigint, what: string) {
   const deployer = account("DEPLOYER").address;
-  const [balance, fees] = await Promise.all([publicClient.getBalance({ address: deployer }), publicClient.estimateFeesPerGas()]);
+  const [balance, fees] = await Promise.all([publicClient.getBalance({ address: deployer }), getFees()]);
   const gasCost = gasLimit * fees.maxFeePerGas;
   const after = balance - value - gasCost;
   if (after < FLOORS.deployer) {

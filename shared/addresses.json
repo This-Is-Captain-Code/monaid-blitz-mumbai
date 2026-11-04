@@ -2,12 +2,13 @@
   "monadTestnet": {
     "chainId": 10143,
     "MonaidCore": {
-      "address": "0xDD22ee7923195EbBcC247d40553BCB138A6D5BBf",
-      "version": "v0",
-      "deployTx": "0x51f331c895125db91a67994d4e23459c9655585ca64cd6d05906f7a645a771b0",
-      "deployBlock": 76858867,
+      "address": "0x3DbE227ad91Cc3bfa14468196F413173dF893867",
+      "version": "v1.1",
+      "deployTx": "0xcc5c76c55a923615285d22bad1a4f8da43f356cfcb1ca02f0ab2a22a1572f1b6",
+      "deployBlock": 76879068,
       "owner": "0x639B5bE0679EC82C7224F31d04bb3dD093222d5D",
-      "verified": "https://testnet.monadvision.com/contracts/full_match/10143/0xDD22ee7923195EbBcC247d40553BCB138A6D5BBf/"
+      "maxPayout": "0.1 MON",
+      "verified": "https://testnet.monadvision.com/contracts/full_match/10143/0x3DbE227ad91Cc3bfa14468196F413173dF893867/"
     },
     "wallets": {
       "DEPLOYER": "0x639B5bE0679EC82C7224F31d04bb3dD093222d5D",
@@ -26,6 +27,27 @@
         "agentAddress": "0x16Cd0840ba8d68B526D5F5D9EB72626bB7A1CA45"
       },
       "_note": "robotId -> on-chain robot address (derived: last 20 bytes of keccak256(\"monaid:robot:<id>\"), no key) and its agent wallet"
+    },
+    "history": {
+      "MonaidCoreV0": {
+        "address": "0xDD22ee7923195EbBcC247d40553BCB138A6D5BBf",
+        "version": "v0",
+        "deployTx": "0x51f331c895125db91a67994d4e23459c9655585ca64cd6d05906f7a645a771b0",
+        "deployBlock": 76858867,
+        "owner": "0x639B5bE0679EC82C7224F31d04bb3dD093222d5D",
+        "verified": "https://testnet.monadvision.com/contracts/full_match/10143/0xDD22ee7923195EbBcC247d40553BCB138A6D5BBf/",
+        "retired": "2026-11-04 (P4), robot balances recovered to DEPLOYER"
+      },
+      "MonaidCoreV1": {
+        "address": "0xb95e667d8DA354a0517553926D39Af148543Ce98",
+        "version": "v1",
+        "deployTx": "0x2535b067ade056ec0c196005359e04967b4699c1cf23917dddb52eb12808ea5c",
+        "deployBlock": 76873061,
+        "owner": "0x639B5bE0679EC82C7224F31d04bb3dD093222d5D",
+        "maxPayout": "0.1 MON",
+        "verified": "https://testnet.monadvision.com/contracts/full_match/10143/0xb95e667d8DA354a0517553926D39Af148543Ce98/",
+        "retired": "2026-11-04 (P4 finish), robot balances recovered to DEPLOYER; maxPayout raised to 0.5 MON for recovery"
+      }
     }
   }
 }
