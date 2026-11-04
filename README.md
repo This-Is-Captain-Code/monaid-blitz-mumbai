@@ -42,7 +42,7 @@ the screen goes red. Cheating is a feature of the demo.
 
 | What | Where |
 |---|---|
-| MonaidCore v0 | [`0xDD22ee7923195EbBcC247d40553BCB138A6D5BBf`](https://testnet.monadvision.com/contracts/full_match/10143/0xDD22ee7923195EbBcC247d40553BCB138A6D5BBf/) (verified) |
+| MonaidCore v1.1 | [`0x3DbE227ad91Cc3bfa14468196F413173dF893867`](https://testnet.monadvision.com/contracts/full_match/10143/0x3DbE227ad91Cc3bfa14468196F413173dF893867/) (verified) |
 | Addresses & ABI | [`shared/addresses.json`](shared/addresses.json) · [`shared/abi/MonaidCore.json`](shared/abi/MonaidCore.json) |
 
 ## Hardware

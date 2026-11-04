@@ -97,7 +97,13 @@ async function followFeed() {
           try {
             const m = JSON.parse(line.slice(5));
             if (m.screen?.state) sendState(m.robotId, m.screen.state);
-            if (m.screen?.say) sendSay(m.robotId, m.screen.say);
+            if (m.screen?.say !== undefined) sendSay(m.robotId, m.screen.say);
+            if (m.screen?.cmd === "job") { // job card line (see docs/agents-api.md)
+              const dev = ROBOT_TO_DEV[m.robotId];
+              if (dev) c.publish(`monaid/${dev}/cmd`, JSON.stringify({
+                cmd: "job", id: m.screen.id ?? "", payout: m.screen.payout ?? "", worker: m.screen.worker ?? "",
+              }), { qos: 1 });
+            }
           } catch { /* ignore non-JSON data lines */ }
         }
       }
