@@ -146,7 +146,7 @@ describe("MonaidCore v1 — jobs", () => {
     await expect(asAgent.write.settle([999n])).to.be.rejectedWith("JobNotFound");
   });
 
-  it("Paused blocks everything that moves money; unpause restores", async () => {
+  it("Paused blocks fund, pay, postJob, claim and settle; unpause restores", async () => {
     const { core, asAgent } = await setup();
     const open = await post(asAgent);
     const claimed = await post(asAgent);
@@ -158,13 +158,35 @@ describe("MonaidCore v1 — jobs", () => {
     await expect(asAgent.write.postJob([ROBOT, 1n, WINDOW])).to.be.rejectedWith("Paused");
     await expect(asAgent.write.claim([open, WORKER])).to.be.rejectedWith("Paused");
     await expect(asAgent.write.settle([claimed])).to.be.rejectedWith("Paused");
-    await expect(asAgent.write.cancel([open])).to.be.rejectedWith("Paused");
-    await time.increase(Number(WINDOW) + 1);
-    await expect(asAgent.write.expire([claimed])).to.be.rejectedWith("Paused");
 
     await core.write.unpause();
-    await asAgent.write.expire([claimed]);
+    await asAgent.write.claim([open, WORKER]);
+    await asAgent.write.settle([open]);
+  });
+
+  it("cancel works while paused (escrow back to the robot)", async () => {
+    const { core, asAgent, asStranger } = await setup();
+    const open = await post(asAgent);
+    await core.write.pause();
+    await expect(asStranger.write.cancel([open])).to.be.rejectedWith("NotRobotAgent"); // still agent-only
     await asAgent.write.cancel([open]);
+    expect((await core.read.getJob([open])).status).to.equal(5); // Cancelled
     expect(await core.read.balanceOf([ROBOT])).to.equal(parseEther("1"));
+    expect(await core.read.escrowOf([ROBOT])).to.equal(0n);
+  });
+
+  it("expire works while paused and is callable by anyone (not just the agent or owner)", async () => {
+    const { core, asAgent, asStranger } = await setup();
+    const claimed = await post(asAgent);
+    await asAgent.write.claim([claimed, WORKER]);
+    await core.write.pause();
+    await expect(asStranger.write.expire([claimed])).to.be.rejectedWith("ClaimNotExpired"); // window rule still applies
+    await time.increase(Number(WINDOW) + 1);
+    await asStranger.write.expire([claimed]); // a stranger, while paused
+    expect((await core.read.getJob([claimed])).status).to.equal(4); // Expired
+    expect(await core.read.balanceOf([ROBOT])).to.equal(parseEther("1"));
+    expect(await core.read.escrowOf([ROBOT])).to.equal(0n);
+    const [ev] = await core.getEvents.JobExpired();
+    expect(ev.args.jobId).to.equal(claimed);
   });
 });

@@ -206,7 +206,8 @@ contract MonaidCore {
     }
 
     /// @notice Anyone, once the claim window has passed without a settle: escrow returns to the robot.
-    function expire(uint256 jobId) external whenNotPaused {
+    ///         Works while paused: it only moves escrow back to the robot's own balance (no MON leaves).
+    function expire(uint256 jobId) external {
         Job storage j = _job(jobId);
         if (j.status == Status.Settled) revert AlreadySettled();
         if (j.status != Status.Claimed) revert JobNotClaimed();
@@ -219,7 +220,8 @@ contract MonaidCore {
     }
 
     /// @notice Robot's agent cancels a job nobody has claimed; escrow returns to the robot.
-    function cancel(uint256 jobId) external whenNotPaused {
+    ///         Works while paused, like expire.
+    function cancel(uint256 jobId) external {
         Job storage j = _job(jobId);
         _onlyAgentOf(j.robot);
         if (j.status != Status.Open) revert JobNotOpen();
