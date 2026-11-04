@@ -1,4 +1,4 @@
-// Monaid T-Deck: screen + keyboard + net (WiFi/MQTT, heartbeats, commands).
+// Monaid T-Deck: glue only. Modules: display, ui, battery, keyboard, monaid_net.
 #include <stdio.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -9,6 +9,8 @@
 #include "esp_timer.h"
 #include "cJSON.h"
 #include "display.h"
+#include "ui.h"
+#include "battery.h"
 #include "monaid_net.h"
 #include "wifi_creds.h"
 
@@ -20,48 +22,37 @@
 
 static const char *TAG = "monaid";
 static i2c_master_dev_handle_t s_kbd;
-static volatile bool s_net_up = false;
-static char s_state[16] = "IDLE";
 
-static void draw_base(void) {
-    display_clear(C_BLACK);
-    display_text(10, 10, "MONAID", C_WHITE, C_BLACK, 3);
-    display_text(10, 50, s_state, C_GREEN, C_BLACK, 3);
-    display_text(10, 95, DEV_ID, C_SILVER, C_BLACK, 1);
-    display_text(10, 112, s_net_up ? "net: up" : "net: down", s_net_up ? C_GREEN : C_RED, C_BLACK, 1);
-    display_flush();
+static const char *jstr(const cJSON *o, const char *k) {
+    const cJSON *v = cJSON_GetObjectItem(o, k);
+    return cJSON_IsString(v) ? v->valuestring : NULL;
 }
 
-static void on_conn(bool up) {
-    s_net_up = up;
-    display_fill_rect(10, 112, 300, 10, C_BLACK);
-    display_text(10, 112, up ? "net: up" : "net: down", up ? C_GREEN : C_RED, C_BLACK, 1);
-    display_flush();
-}
-
-// Server commands: {"cmd":"state","state":"JOB OPEN"} | {"cmd":"say","text":"..."}
+// Commands: state | job | say | simulate  (see server/bridge/README.md)
 static void on_cmd(const char *json, int len) {
     char *buf = strndup(json, len);
     if (!buf) return;
     cJSON *root = cJSON_Parse(buf);
     free(buf);
     if (!root) return;
-    const cJSON *cmd = cJSON_GetObjectItem(root, "cmd");
-    if (cJSON_IsString(cmd)) {
-        if (strcmp(cmd->valuestring, "state") == 0) {
-            const cJSON *st = cJSON_GetObjectItem(root, "state");
-            if (cJSON_IsString(st)) {
-                strlcpy(s_state, st->valuestring, sizeof(s_state));
-                ESP_LOGI(TAG, "state -> %s", s_state);
-                draw_base();
-            }
-        } else if (strcmp(cmd->valuestring, "say") == 0) {
-            const cJSON *tx = cJSON_GetObjectItem(root, "text");
-            if (cJSON_IsString(tx)) {
-                display_fill_rect(10, 140, 300, 32, C_BLACK);
-                display_text(10, 140, tx->valuestring, C_CYAN, C_BLACK, 2);
-                display_flush();
-            }
+    const char *cmd = jstr(root, "cmd");
+    if (cmd) {
+        if (!strcmp(cmd, "state")) {
+            const char *st = jstr(root, "state");
+            if (st) { ESP_LOGI(TAG, "state -> %s", st); ui_state(st); }
+        } else if (!strcmp(cmd, "job")) {
+            char idbuf[16] = "";
+            const cJSON *id = cJSON_GetObjectItem(root, "id");
+            if (cJSON_IsNumber(id)) snprintf(idbuf, sizeof(idbuf), "%d", id->valueint);
+            else if (cJSON_IsString(id)) snprintf(idbuf, sizeof(idbuf), "%s", id->valuestring);
+            if (idbuf[0]) ui_job(idbuf, jstr(root, "payout"), jstr(root, "worker"));
+            else ui_job_clear();
+        } else if (!strcmp(cmd, "say")) {
+            const char *tx = jstr(root, "text");
+            if (tx) ui_say(tx);
+        } else if (!strcmp(cmd, "simulate")) {
+            const char *kind = jstr(root, "kind"); // every sensor has a simulate switch
+            if (kind) { ESP_LOGW(TAG, "simulate %s", kind); monaid_net_event(kind, "{\"sim\":true}"); }
         }
     }
     cJSON_Delete(root);
@@ -97,17 +88,13 @@ void app_main(void) {
     ESP_ERROR_CHECK(i2c_master_bus_add_device(bus, &dev_cfg, &s_kbd));
 
     display_init();
-    draw_base();
+    battery_init();
+    ui_init(DEV_ID);
 
     monaid_net_cfg_t net = {
-        .dev_id = DEV_ID,
-        .wifi_ssid = WIFI_SSID,
-        .wifi_pass = WIFI_PASS,
-        .broker_uri = BROKER_URI,
-        .mqtt_user = DEV_ID,
-        .mqtt_pass = MQTT_PASS,
-        .on_cmd = on_cmd,
-        .on_conn = on_conn,
+        .dev_id = DEV_ID, .wifi_ssid = WIFI_SSID, .wifi_pass = WIFI_PASS,
+        .broker_uri = BROKER_URI, .mqtt_user = DEV_ID, .mqtt_pass = MQTT_PASS,
+        .on_cmd = on_cmd, .on_conn = ui_net,
     };
     ESP_ERROR_CHECK(monaid_net_start(&net));
     ESP_LOGI(TAG, "tdeck up");
@@ -119,7 +106,6 @@ void app_main(void) {
     while (1) {
         char c = kbd_read();
         if (c != 0 && c != last) {
-            ESP_LOGI(TAG, "key: %c", (c >= 32 && c < 127) ? c : '?');
             char data[32];
             snprintf(data, sizeof(data), "{\"key\":\"%c\"}", (c >= 32 && c < 127) ? c : '?');
             monaid_net_event("key", data);
@@ -130,17 +116,14 @@ void app_main(void) {
         if (now - last_beat >= HEARTBEAT_MS) {
             last_beat = now;
             beats++;
-            char data[48];
-            snprintf(data, sizeof(data), "{\"up\":%lld,\"n\":%lu}", now / 1000, (unsigned long)beats);
-            esp_err_t err = monaid_net_event("heartbeat", data);
-            ESP_LOGI(TAG, "heartbeat #%lu %s", (unsigned long)beats, err == ESP_OK ? "sent" : "queued(no net)");
-            char buf[32];
-            snprintf(buf, sizeof(buf), "heartbeat #%lu", (unsigned long)beats);
-            display_fill_rect(10, 210, 300, 16, C_BLACK);
-            display_text(10, 210, buf, C_ORANGE, C_BLACK, 1);
-            display_flush();
+            float v = battery_volts();
+            ui_battery(v);
+            char data[64];
+            snprintf(data, sizeof(data), "{\"up\":%lld,\"n\":%lu,\"vbat\":%.2f}",
+                     now / 1000, (unsigned long)beats, v);
+            monaid_net_event("heartbeat", data);
+            ui_heartbeat(beats);
         }
-
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }

@@ -1,5 +1,4 @@
-// Monaid Watcher: power-up, screen, knob, button, net (WiFi/MQTT).
-// Long-press knob = simulated crash (event + red screen, recover on release).
+// Monaid Watcher: glue only. Modules: pca9535, display, ui, knob, monaid_net.
 #include <stdio.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -10,6 +9,7 @@
 #include "cJSON.h"
 #include "pca9535.h"
 #include "display.h"
+#include "ui.h"
 #include "monaid_net.h"
 #include "wifi_creds.h"
 
@@ -20,52 +20,53 @@
 
 static const char *TAG = "monaid";
 static volatile int32_t s_knob = 0;
-static volatile bool s_net_up = false;
-static char s_state[16] = "IDLE";
 static bool s_crashed = false;
 
 static void IRAM_ATTR knob_isr(void *arg) {
     if (gpio_get_level(PIN_KNOB_B)) s_knob--; else s_knob++;
 }
 
-static void draw_base(void) {
-    display_clear(C_BLACK);
-    display_text(90, 60, "MONAID", C_WHITE, C_BLACK, 4);
-    display_text(90, 120, s_state, C_GREEN, C_BLACK, 4);
-    display_text(90, 180, DEV_ID, C_SILVER, C_BLACK, 1);
-    display_text(90, 196, s_net_up ? "net: up" : "net: down", s_net_up ? C_GREEN : C_RED, C_BLACK, 1);
-    display_flush();
+static const char *jstr(const cJSON *o, const char *k) {
+    const cJSON *v = cJSON_GetObjectItem(o, k);
+    return cJSON_IsString(v) ? v->valuestring : NULL;
 }
 
-static void on_conn(bool up) {
-    s_net_up = up;
-    if (s_crashed) return;
-    display_fill_rect(90, 196, 240, 10, C_BLACK);
-    display_text(90, 196, up ? "net: up" : "net: down", up ? C_GREEN : C_RED, C_BLACK, 1);
-    display_flush();
+static void set_crashed(bool on) {
+    s_crashed = on;
+    monaid_net_event(on ? "crash" : "recover", "{\"sim\":true}");
+    ui_crash(on);
+    if (on) ESP_LOGW(TAG, "SIMULATED CRASH"); else ESP_LOGI(TAG, "recovered");
 }
 
+// Commands: state | job | say | simulate (crash/recover work the real sim path)
 static void on_cmd(const char *json, int len) {
     char *buf = strndup(json, len);
     if (!buf) return;
     cJSON *root = cJSON_Parse(buf);
     free(buf);
     if (!root) return;
-    const cJSON *cmd = cJSON_GetObjectItem(root, "cmd");
-    if (cJSON_IsString(cmd)) {
-        if (strcmp(cmd->valuestring, "state") == 0) {
-            const cJSON *st = cJSON_GetObjectItem(root, "state");
-            if (cJSON_IsString(st)) {
-                strlcpy(s_state, st->valuestring, sizeof(s_state));
-                ESP_LOGI(TAG, "state -> %s", s_state);
-                if (!s_crashed) draw_base();
-            }
-        } else if (strcmp(cmd->valuestring, "say") == 0) {
-            const cJSON *tx = cJSON_GetObjectItem(root, "text");
-            if (cJSON_IsString(tx) && !s_crashed) {
-                display_fill_rect(90, 230, 300, 32, C_BLACK);
-                display_text(90, 230, tx->valuestring, C_CYAN, C_BLACK, 2);
-                display_flush();
+    const char *cmd = jstr(root, "cmd");
+    if (cmd) {
+        if (!strcmp(cmd, "state")) {
+            const char *st = jstr(root, "state");
+            if (st) { ESP_LOGI(TAG, "state -> %s", st); ui_state(st); }
+        } else if (!strcmp(cmd, "job")) {
+            char idbuf[16] = "";
+            const cJSON *id = cJSON_GetObjectItem(root, "id");
+            if (cJSON_IsNumber(id)) snprintf(idbuf, sizeof(idbuf), "%d", id->valueint);
+            else if (cJSON_IsString(id)) snprintf(idbuf, sizeof(idbuf), "%s", id->valuestring);
+            if (idbuf[0]) ui_job(idbuf, jstr(root, "payout"), jstr(root, "worker"));
+            else ui_job_clear();
+        } else if (!strcmp(cmd, "say")) {
+            const char *tx = jstr(root, "text");
+            if (tx) ui_say(tx);
+        } else if (!strcmp(cmd, "simulate")) {
+            const char *kind = jstr(root, "kind");
+            if (kind) {
+                ESP_LOGW(TAG, "simulate %s", kind);
+                if (!strcmp(kind, "crash")) set_crashed(true);
+                else if (!strcmp(kind, "recover")) set_crashed(false);
+                else monaid_net_event(kind, "{\"sim\":true}");
             }
         }
     }
@@ -80,7 +81,7 @@ void app_main(void) {
     vTaskDelay(pdMS_TO_TICKS(50));
 
     display_init();
-    draw_base();
+    ui_init(DEV_ID);
 
     gpio_config_t knob = {
         .pin_bit_mask = (1ULL << PIN_KNOB_A) | (1ULL << PIN_KNOB_B),
@@ -94,14 +95,9 @@ void app_main(void) {
     gpio_set_intr_type(PIN_KNOB_B, GPIO_INTR_DISABLE);
 
     monaid_net_cfg_t net = {
-        .dev_id = DEV_ID,
-        .wifi_ssid = WIFI_SSID,
-        .wifi_pass = WIFI_PASS,
-        .broker_uri = BROKER_URI,
-        .mqtt_user = DEV_ID,
-        .mqtt_pass = MQTT_PASS,
-        .on_cmd = on_cmd,
-        .on_conn = on_conn,
+        .dev_id = DEV_ID, .wifi_ssid = WIFI_SSID, .wifi_pass = WIFI_PASS,
+        .broker_uri = BROKER_URI, .mqtt_user = DEV_ID, .mqtt_pass = MQTT_PASS,
+        .on_cmd = on_cmd, .on_conn = ui_net,
     };
     ESP_ERROR_CHECK(monaid_net_start(&net));
     ESP_LOGI(TAG, "watcher up");
@@ -118,13 +114,7 @@ void app_main(void) {
             char data[32];
             snprintf(data, sizeof(data), "{\"pos\":%ld}", (long)k);
             monaid_net_event("knob", data);
-            if (!s_crashed) {
-                char buf[24];
-                snprintf(buf, sizeof(buf), "knob: %ld   ", (long)k);
-                display_fill_rect(90, 260, 240, 32, C_BLACK);
-                display_text(90, 260, buf, C_CYAN, C_BLACK, 2);
-                display_flush();
-            }
+            ui_knob(k);
         }
 
         uint16_t pins;
@@ -133,23 +123,12 @@ void app_main(void) {
             int64_t now_ms = esp_timer_get_time() / 1000;
             if (pressed && press_start == 0) press_start = now_ms;
             if (!pressed) {
-                if (press_start != 0 && !s_crashed && (now_ms - press_start) < LONGPRESS_MS) {
-                    ESP_LOGI(TAG, "knob click");
+                if (press_start != 0 && !s_crashed && (now_ms - press_start) < LONGPRESS_MS)
                     monaid_net_event("click", NULL);
-                }
                 press_start = 0;
-                if (s_crashed) {
-                    s_crashed = false;
-                    monaid_net_event("recover", "{\"sim\":true}");
-                    draw_base();
-                }
+                if (s_crashed) set_crashed(false);
             } else if (!s_crashed && (now_ms - press_start) >= LONGPRESS_MS) {
-                s_crashed = true;
-                ESP_LOGW(TAG, "SIMULATED CRASH");
-                monaid_net_event("crash", "{\"sim\":true}");
-                display_clear(C_RED);
-                display_text(60, 170, "CRASHED", C_WHITE, C_RED, 6);
-                display_flush();
+                set_crashed(true);
             }
         }
 
@@ -159,17 +138,9 @@ void app_main(void) {
             beats++;
             char data[48];
             snprintf(data, sizeof(data), "{\"up\":%lld,\"n\":%lu}", now / 1000, (unsigned long)beats);
-            esp_err_t err = monaid_net_event("heartbeat", data);
-            ESP_LOGI(TAG, "heartbeat #%lu %s", (unsigned long)beats, err == ESP_OK ? "sent" : "no net");
-            if (!s_crashed) {
-                char buf[32];
-                snprintf(buf, sizeof(buf), "heartbeat #%lu", (unsigned long)beats);
-                display_fill_rect(90, 300, 240, 16, C_BLACK);
-                display_text(90, 300, buf, C_ORANGE, C_BLACK, 1);
-                display_flush();
-            }
+            monaid_net_event("heartbeat", data);
+            if (!s_crashed) ui_heartbeat(beats);
         }
-
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
