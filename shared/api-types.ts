@@ -124,14 +124,14 @@ export type FeedEvent = {
     | "approval_decided"
     | "blocked"
     | "kill_switch"
-    | "claude_decision" // Claude answered or fell back: { question, source, choice?, reason?, fallback?, detail?, ms }
+    | "agent_decision" // decision agent answered or fell back: { question, source, by, choice?, reason?, fallback?, detail?, ms }
     | "screen" // bridge screen line: { robotId: <bridge number>, screen: {state} | {say} | {cmd:"job", id, payout, worker} }
     | "tx"; // every transaction attempt (result: success | reverted | refused | blocked | out-of-gas | error)
   robot?: string;
   [k: string]: unknown;
 };
 
-// ---------------- Claude decisions (P7; route /agent/decide, alias /muse/decide) ----------------
+// ---------------- Decision agent (OpenRouter; shown as "Claude" for a Claude model, else "AI agent"). Route /agent/decide, alias /muse/decide ----------------
 
 /** POST /agent/decide — approval mode: Claude picks approve/reject for a pending approval and we apply it. */
 export type ClaudeApprovalRequest = { approvalId: string };
@@ -142,16 +142,16 @@ export type ClaudeAdviceRequest = {
 };
 
 export type ClaudeDecision =
-  | { source: "claude"; choice: string; reason: string; ms: number; model: string }
-  | { source: "owner_decides"; fallback: "no_api_key" | "timeout" | "invalid_output" | "refusal" | "api_error"; detail: string; ms: number };
+  | { source: "agent"; by: "Claude" | "AI agent"; choice: string; reason: string; ms: number; model: string }
+  | { source: "owner_decides"; by: "Claude" | "AI agent"; fallback: "no_api_key" | "timeout" | "invalid_output" | "refusal" | "api_error"; detail: string; ms: number };
 
 export type ClaudeApprovalResponse = {
   ok: true;
   mode: "approval";
   approvalId: string;
-  claude: ClaudeDecision;
+  agent: ClaudeDecision;
   /** null when Claude fell back (approval stays pending). Otherwise the result of applying Claude's pick. */
   applied: DecideResponse | { ok: false; error: string; message: string } | null;
   note?: string;
 };
-export type ClaudeAdviceResponse = { ok: true; mode: "advice"; claude: ClaudeDecision };
+export type ClaudeAdviceResponse = { ok: true; mode: "advice"; agent: ClaudeDecision };
