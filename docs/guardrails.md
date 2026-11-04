@@ -21,7 +21,7 @@ adds rules the chain doesn't know about (daily budgets, owner approval). The off
 | 11 | Global kill switch (ours) | off-chain | `MONAID_KILL=1` or `engageKillSwitch()` (P6: `POST /admin/kill`) | `KILL_SWITCH` — **every** send, agents and DEPLOYER | `demo:guardrails` "kill switch" |
 | 12 | DEPLOYER hard floor 12 MON | off-chain | `sendTx` on every DEPLOYER value send | `Refused: … can still spend X MON` | `check:refusals` |
 | 13 | Agent gas top-ups capped per day | off-chain | `topup:agents`, 10 MON/day | skipped with a message | `topup:agents --dry-run` |
-| 14 | Muse chooses only among our options | off-chain | `agents/src/muse.ts`: options built by us (approval mode) or validated (2–8 ids); output schema-checked JSON; choice must be an option id; then applied via `/owner/decide` (all guardrails) | invalid output / empty reason / refusal / >8 s / no key → `owner_decides`, approval stays pending | `npm test` (Muse fallbacks); `mock:bridge -- happy --muse`; `check:muse` |
+| 14 | Decision agent (OpenRouter; "Claude" for a Claude model) chooses only among our options | off-chain | `agents/src/muse.ts`: options built by us (approval mode) or validated (2–8 ids); output schema-checked JSON; choice must be an option id; then applied via `/owner/decide` (all guardrails) | invalid output / empty reason / refusal / >8 s / no key → `owner_decides`, approval stays pending | `npm test` (decision fallbacks); `check:agent-decision` |
 | 15 | Device/worker/message data is untrusted input | off-chain | `RobotAgent` validates addresses, records proofs as data | `Invalid worker address` | — |
 
 ## How the off-chain check runs

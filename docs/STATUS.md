@@ -1,10 +1,35 @@
 # Monaid — Status
 
-_Last updated: 2026-11-04, end of P7; next P8 (team picks the module)._
+_Last updated: 2026-11-04, final run (Down module, bridge-matched, OpenRouter decision agent)._
 
 **My scope:** `contracts/`, `agents/`, `shared/`, `docs/` only — wallets, funding, transactions, robot agents,
 Muse logic, guardrails, and an API for teammates. Firmware, broker, MQTT bridge, screens, portal UI and
 WhatsApp transport belong to teammates.
+
+## How to run the demo
+
+1. Laptop on the hotspot; teammate's bridge on the same laptop with `AGENTS_API=http://localhost:4000` and `MONAID_TOKEN` = our `MONAID_API_TOKEN` (agents/.env).
+2. `cd agents && npm run api` — Agents API on port 4000 + expiry watcher (keep this terminal open).
+3. `npm run reset:demo` — closes leftover jobs, robots to 0.5 MON, agents above floor, kill switch off, prints balances + explorer links.
+4. `npm run preflight` — must end with "ready to demo" (RPC, floors, robots, contract = shared/, API on 4000, token, OpenRouter key).
+5. Open the explorer on AGENT_1 / AGENT_2 (links printed by reset:demo) and the bridge with `FEED_ENABLED=1`.
+6. Happy path: long-press the Watcher (crash) → both screens JOB OPEN (0.01 MON escrowed on-chain).
+7. Type `RAJ-7` + Enter on the T-Deck → CLAIMED; release the Watcher (recover) → PAID on both screens (~1 s).
+8. Fail path: crash again → click the Watcher knob (claim as DEMO-1) → don't recover → after 60 s BLOCKED (escrow back).
+9. Guardrail beats: `npm run demo:guardrails`; kill switch: `POST /admin/kill`; decision agent: `npm run check:agent-decision`.
+10. No hardware? `npm run mock:bridge` plays the exact bridge format end to end (~85 s, prints PASS/FAIL).
+
+### Final-run results
+
+- Bridge match (their `server/bridge` on `step/firmware-net`): numeric robotId 1/2 → `tdeck-01`/`watcher-01` (same on-chain robots via `addressId`), port 4000,
+  `x-monaid-token`, all 9 kinds → 200, duplicate-dropping instead of strict seq, claim by typed id (`RAJ-7`/`DEMO-1`/`DEMO-2`, all pay demo-1) on the oldest open
+  job, unknown worker → `UNKNOWN WORKER` on that device, screen lines `{robotId, screen:{state|say|cmd:job}}` to both devices. mock:bridge 19/19.
+- Rehearsals (reset:demo → preflight → happy → fail), 3/3 PASS: recover→PAID on both screens **1146 / 935 / 914 ms**; fail path expired 63–64 s after the claim.
+- Decision agent via OpenRouter `anthropic/claude-haiku-5.5` (shown as "Claude"): 3 real decisions **1771 / 2247 / 1664 ms** (avg ≈ 1.9 s < 3 s, model kept);
+  reason e.g. "Robot 1 powers the 15:00 judge demo, so it gets help first; both payouts are equal at 0.01 MON." Via API `/agent/decide`: 1711 ms.
+- RPC: the venue network drops requests to testnet-rpc.monad.xyz; all clients now fall back to `https://rpc.ankr.com/monad_testnet`.
+- Not done: hotspot settle timing (pending, see below); job card needs a `cmd:"job"` branch in the teammate's bridge (state/say lines already work).
+- Blocked by the auto-mode classifier (correctly): raising `maxPayout` on the live contract to drain robots — solved instead by keeping robot addresses (`addressId`).
 
 ## Plan
 
@@ -17,9 +42,9 @@ WhatsApp transport belong to teammates.
 | P4 | Jobs in the contract (MonaidCore v1.1) + sendTx latency pass | done and merged (PR #4) |
 | P5 | Robot agents and off-chain guardrails | done and merged (PR #5) |
 | P6 | Agents API for teammates | done and merged (PR #6) |
-| P7 | Muse (decision logic only) | **done** — branch `step7/muse` (not merged). **Needs ANTHROPIC_API_KEY for live decisions.** |
-| P8 | Module contract (Charger / Lost / Down, team picks) | **next — waiting for the team's pick** |
-| P9 | Demo hardening | — |
+| P7 | Decision agent (was "Muse"; now OpenRouter, shown as Claude) | done and merged (PR #7) + OpenRouter switch in final run |
+| P8 | Module: **Down**, on MonaidCore v1.1 (no new contract) | done — crash/down → 0.01 MON job, claim, recover/first heartbeat → settle, 60 s → expire |
+| P9 | Demo hardening | done — reset:demo, preflight, mock:bridge, 3 rehearsals |
 
 ### Pending
 
@@ -36,7 +61,7 @@ WhatsApp transport belong to teammates.
   maxOpenJobs 2, ownerApprovalAbove **0.02** MON. On-chain cap (MonaidCore.maxPayout) 0.1 MON.
 - Claim window 60 s (`jobs.claimWindowSec`); the API's expiry watcher expires claimed jobs after it (fail path).
 
-## Muse (P7)
+## Decision agent (P7, originally "Muse"; superseded by the OpenRouter switch above)
 
 Muse = the owner's decision agent (`agents/src/muse.ts`). It **decides, never sends transactions**: picks exactly one option id
 with a one-line reason via the Claude API (`claude-opus-5-5`, effort `low`, structured JSON output, server-side refusal
