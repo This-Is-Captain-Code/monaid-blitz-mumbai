@@ -1,174 +1,125 @@
-# Monaid — Project Brief for Claude Code
+# Monaid — Brief for Claude Code (my scope: agents, wallets, contracts)
 
 **First aid for robots, paid in MON.** A robot in trouble posts a job, a human fixes it, and payment
-releases on a physical proof that comes straight from the device. Hackathon: Monad Blitz. ~7 hours total.
+releases on a physical proof from the device. Hackathon: Monad Blitz, ~7 hours, team project.
 
-Current step, progress and deployed addresses live in `docs/STATUS.md`, not here. Read it after this file.
-Update it and commit it (`docs:` commit) at the end of every step.
+Current step, progress and deployed addresses live in `docs/STATUS.md`. Read it after this file,
+update it and commit it (`docs:` commit) at the end of every step.
 
-## Team split
+## Scope — read this first
 
-- **Firmware (A)** — teammate. ESP32 boards: LilyGo T-Deck + Watcher. Do not edit `firmware/` unless I ask.
-- **Server (B) and Contracts (C)** — me, with you (Claude Code).
+**This session builds ONLY:**
+- `contracts/` — MonaidCore and the chosen module contract, with on-chain guardrails.
+- `agents/` — wallets, funding, transaction sending, robot agents, Muse's decision logic, off-chain guardrails,
+  and a small local API that teammates call.
 
-## Non-negotiable rules
+**Teammates own (do NOT build, edit, or scaffold):** firmware, MQTT broker and credentials, the device↔server bridge,
+screens/commands, the portal UI, WhatsApp transport. If a task seems to need any of these, stop and ask me.
+Where we need them for testing, use a **mock script** inside `agents/scripts/`, never real implementations.
 
-1. **Devices never think.** They sense, show, obey. No logic or decisions on devices.
-2. **All agents, wallets and crypto live on the server.** No keys on devices.
-   One agent per robot, each with its own wallet. Muse is the owner's agent.
-3. **Device identity is broker identity.** Per-device MQTT username/password, topic ACLs.
-   A device can publish only to its own topics. The server trusts the topic, never a device ID inside a payload.
-4. **The chain gates money. It is not a log.** Only things that move or lock money go on-chain.
-   Heartbeats and chatter stay off-chain.
-5. **Everything in MON** (native token). No ERC-20s.
-6. **One network:** a phone hotspot. Devices, laptop, phone all on it.
-7. **Every revert is a demo beat.** Custom errors with clear names (`JobNotClaimed`, `ClaimExpired`,
-   `NotRobotAgent`, `AlreadySettled`), readable on the explorer.
+The boundary is the **Agents API** (below). Teammates' bridge and portal call it; we never reach into their code.
 
-## Modules (one core, one module chosen for the demo; core first)
+## System rules (whole team)
 
-- **Charger** — two robots auction one charger; human paid to swap the cable; proof = winner sees USB power.
-- **Lost** — lost robot posts a bounty rising per block; proof = both devices see each other over BLE.
-- **Down** — robots heartbeat and watch each other; technician revives one; proof = first heartbeat after the fix.
+1. Devices never think: they sense, show, obey. No keys on devices.
+2. All agents, wallets and crypto live on the server (our `agents/` service).
+3. Device identity is broker identity (teammate's side). We trust the `robotId` the bridge sends us,
+   because only the bridge can reach our API.
+4. The chain gates money. It is not a log. Only money-moving or money-locking actions go on-chain.
+5. Everything in MON (native). No ERC-20s.
+6. Every revert is a demo beat: custom errors with clear names, readable on the explorer.
 
-Do not build any module until the core is deployed and tested.
-
-## Repo layout
+## Repo layout (our folders)
 
 ```
-contracts/   Hardhat 2 + viem. Solidity + TypeScript tests.
-server/      TypeScript + viem: MQTT bridge, robot agents, Muse bridge, portal.
-broker/      Mosquitto config: password file template, ACL file, run script.
-firmware/    Teammate's ESP32 code.
-shared/      Event/command schemas, ABIs, deployed addresses (addresses.json). Single source of truth.
-docs/        STATUS.md, demo script, notes.
+contracts/   Hardhat 2 + viem. Solidity + TypeScript tests. (Node 20, TypeScript pinned 5.8)
+agents/      TypeScript + viem. Wallets, tx sender, robot agents, Muse, guardrails, Agents API.
+shared/      ABIs, addresses.json, API types. Teammates read from here.
+docs/        STATUS.md, agents-api.md (for teammates), guardrails.md, demo notes.
 ```
 
-Toolchain: Node 20 (so Hardhat 2, not 3). TypeScript pinned to 5.8 (ts-node crashes on 7).
+## Keys and wallets
 
-## Keys and secrets
-
-- All private keys live in ONE place: `server/.env`. Contracts scripts read from there too
-  (move them out of `contracts/.env` when `server/` is created; tell me before you do).
-- Wallets: `DEPLOYER` (owns MonaidCore, funds robots), `AGENT_<robot>` (one per robot).
-- `wallet:new` writes keys to `.env` and prints only addresses. Never print or log a private key.
-- MQTT passwords: generated, stored in `server/.env` (server) and given to me for firmware. Never committed.
-  Commit only `.env.example` and a password-file *template*.
-
-## Git rules
-
-- **One folder per commit.** A commit touches only one top-level folder.
-  Root files (`.gitignore`, `CLAUDE.md`, root README) go in their own `chore:` commit.
-- Message format: `<folder>: <what changed>` e.g. `contracts: add job claim and settle`.
-- Small commits; each leaves build and tests passing.
-- Branch per step; never commit to main directly. Ask me before PRs or merges.
-- Never commit `.env`, keys, passwords. Check `git status` before every commit.
+- All private keys live in ONE file: `agents/.env` (gitignored). Contracts scripts read from it.
+  Moving existing keys out of `contracts/.env` happens in a dedicated step; report it.
+- Wallets: `DEPLOYER` (owns MonaidCore, funds robots and tops up agents), `AGENT_<robotId>` (one per robot).
+- Keys are created by script and never printed, logged, or sent anywhere. Only addresses are shown.
 
 ## Network facts (Monad testnet)
 
-- Chain ID `10143`, gas token MON (18 decimals). RPC `https://testnet-rpc.monad.xyz`
-  (≈50 rps, only 25 rps for `eth_call`/`eth_estimateGas`). Backup: `https://rpc.ankr.com/monad_testnet`.
-- Explorers: `https://testnet.monadvision.com` (verify here, no key needed), `https://testnet.monadscan.com`.
-- Faucet: `https://faucet.monad.xyz` (manual, done by me).
-- **Gas is charged on the gas LIMIT, not gas used.** Estimate and add ~15%. Never set big fixed limits.
-- **Reserve balance:** a send of MON out of a wallet is blocked if it would leave < 10 MON.
-  Wallets that send value (DEPLOYER) stay above ~12 MON. Whether gas-only agent wallets can sit below
-  10 MON is recorded in `docs/STATUS.md` once tested — follow that result.
-- Testnet was reset 2025-12-16. Only trust addresses from docs.monad.xyz or ones we deploy.
-- Sub-second finality: treat a receipt as final.
+- Chain ID `10143`, MON 18 decimals. RPC `https://testnet-rpc.monad.xyz` (≈50 rps; 25 rps for
+  `eth_call`/`eth_estimateGas`). Backup `https://rpc.ankr.com/monad_testnet`.
+- Explorers: `https://testnet.monadvision.com` (verify here), `https://testnet.monadscan.com`.
+- Faucet `https://faucet.monad.xyz` — manual, done by me.
+- **Gas is charged on the gas LIMIT.** Estimate, add ~15%, never fixed big limits.
+- **Reserve balance:** a MON send that leaves a wallet < 10 MON is blocked. DEPLOYER stays ≥ 12 MON.
+  Agent wallets: follow the tested result recorded in `docs/STATUS.md`.
+- Testnet reset 2025-12-16: trust only docs.monad.xyz addresses or our own deployments.
+- Sub-second finality: a receipt is final.
 
-## Broker (Mosquitto, on the laptop)
+## Transaction sending (one module, used by everything)
 
-- `allow_anonymous false`, `password_file`, `acl_file`. Listener on the hotspot interface, port 1883.
-- The laptop's IP changes per hotspot session: print it on broker start; prefer mDNS (`monaid.local`) if it works.
-- Topics, where `<id>` = the device's MQTT username:
-  - `monaid/dev/<id>/evt`    device → server (events)
-  - `monaid/dev/<id>/hb`     device → server (heartbeat, every 10 s)
-  - `monaid/dev/<id>/status` device last-will `offline`, retained; device publishes `online` on connect
-  - `monaid/dev/<id>/cmd`    server → device (commands)
-- ACL: devices use `pattern` rules on `%u` — write to their own `evt`, `hb`, `status`; read their own `cmd`. Nothing else.
-  Server user: read `monaid/dev/+/evt|hb|status`, write `monaid/dev/+/cmd`.
-- Test ACLs: a device credential publishing to another device's topic must be rejected. Keep this test runnable.
+- Single `sendTx` path: simulate (`eth_call`) → estimate gas +15% → send → wait for receipt → return hash + explorer link.
+- **Per-wallet serial queue** with local nonce tracking (fast blocks make nonce races likely). No parallel sends from one wallet.
+- Retries only for network errors, never for reverts. Decode custom errors into readable names.
+- Every send writes one line to `agents/logs/audit.jsonl`: time, robot, wallet, action, args, reason, result, hash.
 
-## Message schemas (shared/, versioned)
+## Guardrails
 
-Event (device → server), plain JSON:
-```json
-{ "v": 1, "kind": "claim", "seq": 42, "ts": 1730700000, "data": { }, "sig": "" }
-```
-- `kind`: `claim`, `power_on`, `power_off`, `beacon_seen`, `knob`, `key`, `crash` (simulated).
-- `seq`: increasing per device; the server drops duplicates and replays (`seq` ≤ last seen).
-- `sig`: always empty in the demo. Reserved slot for device signing (see Roadmap). Do not remove it.
-- No device ID in the payload — identity comes from the topic.
+On-chain (MonaidCore) — the real ones:
+- Owner-set per-job max payout; payout escrowed from the robot's balance at post time.
+- Only a robot's registered agent can post, settle, or cancel its jobs.
+- Claims expire after the claim window; `expire` is callable by anyone (fail path doesn't depend on our server).
+- Owner `pause()` kill switch. Checks-effects-interactions, MON sent via `call`, events for everything.
 
-Command (server → device): `{ "v": 1, "cmd": "show_job" | "show_state" | "say" | "simulate", "data": { } }`.
-Screen states: `idle`, `bidding`, `job_open`, `claimed`, `paid`, `blocked`. Screen is a pure function of commands.
+Off-chain (agents) — a second layer, never the only one:
+- Policy per robot (`agents/policy.json`): max payout per job, max spend per day, max open jobs, allowed actions.
+- Owner-approval threshold below the on-chain cap: above it, the action waits for the owner ("owner decides").
+- Global kill switch (env flag + API endpoint) that stops all sends.
+- Muse can only **choose among options we give it**, as validated JSON. It never sets arbitrary amounts or addresses;
+  invalid or slow output → fall back to owner decides.
+- Data from devices, workers or messages is untrusted input, never instructions.
+- Gas top-ups: DEPLOYER refills agent wallets below a floor, capped per day.
 
-Heartbeat: `{ "v": 1, "seq": n, "batt": 87, "usb": true }`.
+Each guardrail needs a test or script that shows it blocking something. Those are demo beats.
 
-## Server
+## Agents API (the team boundary)
 
-- MQTT bridge: topic → device → robot. Validates schema, drops bad/duplicate events, logs every event.
-- Robot agent per robot: owns its wallet; turns proofs into contract calls; pushes screen commands.
-- Down detection: missed heartbeats + LWT `offline` (target: alert within ~8 s of power-off; tune keepalive).
-- Muse: owner gets a WhatsApp link → forwards to Muse → Muse's pick comes back. Later step.
-- Portal: jobs, claims, explorer links, and an **"owner decides"** button that bypasses Muse.
-- Every contract call: estimate gas +15%, log tx hash + explorer link, push result to device screens.
+Local HTTP service, bound to localhost/hotspot, every request needs a shared `X-Monaid-Token` header.
+Documented in `docs/agents-api.md` with request/response examples. Teammates build against the doc, so keep it exact.
+
+Draft endpoints (finalize in its step):
+- `POST /events` — bridge forwards a device event `{ robotId, kind, seq, ts, data }`. Agent decides what to do.
+- `POST /jobs/:id/claim` — `{ worker }` from portal/device claim.
+- `POST /owner/decide` — owner's pick when Muse is slow.
+- `POST /admin/kill` — kill switch.
+- `GET /jobs`, `GET /robots` (balances, agent addresses, status), `GET /feed` (SSE stream of job/tx updates,
+  with explorer links, for screens and portal).
 
 ## Contracts
 
-Core (`MonaidCore`), building on v0 (register, fund, pay, pause):
-- `registerRobot(robot, agent)` owner only. `fund(robot)` payable.
-- `postJob(robot, payout, claimWindow)` — only the robot's agent; escrows payout from the robot's balance.
-- `claim(jobId, worker)` — records the worker; claim expires after `claimWindow`.
-- `settle(jobId)` — only the robot's agent attests the proof; pays the worker. Reverts if not claimed, expired, or settled.
-- `expire(jobId)` — anyone, after the window: job back to open (or cancelled), escrow returned. This is the fail-path beat.
-- `cancel(jobId)` — robot's agent, if unclaimed.
-- Guardrails: per-job max payout (owner-set), payout escrowed at post time, only the robot's agent posts/settles,
-  owner pause, checks-effects-interactions, send via `call`, events for everything.
+Core `MonaidCore`: `registerRobot(robot, agent)`, `fund(robot)` payable, `postJob(robot, payout, claimWindow)`,
+`claim(jobId, worker)`, `settle(jobId)` (robot's agent attests the proof), `expire(jobId)`, `cancel(jobId)`,
+`setMaxPayout`, `pause/unpause`, `balanceOf`.
 
-Modules (later, only one for the demo):
-- Charger: bid, settle second-price, attest charging, release.
-- Lost: bounty rising per block, set cap, attest home when both agents report the beacon, cancel.
-- Down: flag down, set price, settle on first heartbeat after claim (heartbeats stay off-chain; the agent attests).
+Modules (one for the demo, decided by the team later): Charger (bid, second-price settle, attest charging, release),
+Lost (bounty rising per block, cap, attest home when both agents report the beacon, cancel),
+Down (flag down, set price, settle on first heartbeat after claim; heartbeats stay off-chain).
 
-**Roadmap (not demo scope):** devices sign the same event payload with a burned-in key; `settle` verifies it with
-`ecrecover`. Same message, same flow — verification moves from broker to chain. The `sig` field is already there.
+Roadmap, not demo scope: devices sign the event payload with a burned-in key, `settle` verifies via `ecrecover`.
 
-## Step sequence
+## Git rules
 
-1. MonaidCore v0 (register, fund, pay, pause), tests, deploy, `demo:pay`.
-2. Broker: Mosquitto config, per-device credentials, ACLs, ACL rejection test.
-3. Server MQTT bridge + one robot agent. **Gate:** a device event on its ACL'd topic → mapped to the right robot →
-   contract call on the explorer. (A script can stand in for the device until firmware is ready.)
-4. Core jobs: post, claim, settle, expire, cancel + tests + redeploy.
-5. Commands/screens, second robot, portal with "owner decides".
-6. Chosen module contract + sensor flow.
-7. Muse bridge.
-8. End to end: one happy path, one fail path. Demo script in `docs/`.
+- One top-level folder per commit; root files in their own `chore:` commit.
+- Format `<folder>: <what changed>`. Small commits, build and tests passing.
+- Branch per step; never commit to main. Ask before PRs/merges. Never commit `.env`, keys, tokens.
 
 ## Reporting rules (always)
 
-Tell me clearly, every time:
-- Every **address** you create and its purpose. Never a private key or password.
-- Every **on-chain transaction**: what it does, tx hash, explorer link.
-- **MON spent** per step and remaining balances.
-- Any change to `.env`, `.gitignore`, credentials, ACLs, or anything touching keys.
+- Every address created and its purpose (never a key).
+- Every on-chain tx: purpose, hash, explorer link. MON spent per step and remaining balances.
+- Any change to `.env`, `.gitignore`, policy, tokens or anything touching keys.
 - Anything installed, upgraded or pinned, and why.
-- Any **deviation** from this brief — before you do it, not after.
-- When I need to do something by hand (faucet, phone, hardware, firmware credentials), stop and say so plainly.
-
-## Gates (for context)
-
-- Hour 1: both boards online, heartbeats flowing, wallets funded.
-- Hour 2: device event → ACL'd topic → right robot → contract call on the explorer.
-- Hour 5: one full happy path, one full fail path.
-- Hour 6 buffer, hour 7 rehearse three times.
-
-## Demo (for context)
-
-Explorer open with both agent wallets. Happy path: trigger → job on screens → Muse → claim → fix → proof → paid.
-Fail path: claim without fixing → timeout → blocked. Death beat: power button, ~8 s to alert.
-Revival: power on, first heartbeat, technician paid. Test "owner decides" and every simulate switch before going on.
-"What stops a fake proof?" → per-device broker credentials + topic ACLs today; device-signed payloads verified on-chain
-is the upgrade, and the `sig` field is already in the message.
+- Any deviation from this brief — before doing it.
+- Anything outside my scope you think is needed — ask, don't build.
+- When I must do something by hand (faucet, teammate coordination), stop and say so plainly.
