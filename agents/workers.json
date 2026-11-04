@@ -1,0 +1,7 @@
+{
+  "_note": "Worker registry: short worker ID -> wallet address. The bridge/portal sends only the ID on a claim; unknown IDs are rejected. Add judges' addresses here on the day (restart the API to reload). IDs: lowercase letters, digits, '-' or '_', max 32.",
+  "workers": {
+    "demo-1": "0x3D8117EE881F4e5Bc158A3428bdede3FcFcC4DD8",
+    "demo-2": "0xAECcb5bdc054fB555a0B1AE412aB50158dE9417E"
+  }
+}
