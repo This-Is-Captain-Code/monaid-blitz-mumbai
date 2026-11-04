@@ -121,7 +121,33 @@ export type FeedEvent = {
     | "approval_decided"
     | "blocked"
     | "kill_switch"
+    | "muse_decision" // Muse answered or fell back: { question, source, choice?, reason?, fallback?, detail?, ms }
     | "tx"; // every transaction attempt (result: success | reverted | refused | blocked | out-of-gas | error)
   robot?: string;
   [k: string]: unknown;
 };
+
+// ---------------- Muse (P7) ----------------
+
+/** POST /muse/decide — approval mode: Muse picks approve/reject for a pending approval and we apply it. */
+export type MuseApprovalRequest = { approvalId: string };
+/** POST /muse/decide — advice mode: Muse picks one of the given options; nothing is applied. */
+export type MuseAdviceRequest = {
+  question: string; // max 300 chars
+  options: { id: string; label: string; detail?: string }[]; // 2–8; id: lowercase a-z0-9_-, max 32
+};
+
+export type MuseResult =
+  | { source: "muse"; choice: string; reason: string; ms: number; model: string }
+  | { source: "owner_decides"; fallback: "no_api_key" | "timeout" | "invalid_output" | "refusal" | "api_error"; detail: string; ms: number };
+
+export type MuseApprovalResponse = {
+  ok: true;
+  mode: "approval";
+  approvalId: string;
+  muse: MuseResult;
+  /** null when Muse fell back (approval stays pending). Otherwise the result of applying Muse's pick. */
+  applied: DecideResponse | { ok: false; error: string; message: string } | null;
+  note?: string;
+};
+export type MuseAdviceResponse = { ok: true; mode: "advice"; muse: MuseResult };
