@@ -1,0 +1,15 @@
+{
+  "name": "monaid-bridge",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Broker <-> Agents API bridge. Devices speak MQTT, agents speak HTTP; this is the translator.",
+  "scripts": {
+    "start": "node bridge.mjs",
+    "cmd": "node cmd.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "mqtt": "^5.10.1"
+  }
+}

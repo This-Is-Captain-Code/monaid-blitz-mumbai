@@ -1,0 +1,10 @@
+# Device identity = broker identity. A device may only touch its own tree.
+user tdeck-01
+topic readwrite monaid/tdeck-01/#
+
+user watcher-01
+topic readwrite monaid/watcher-01/#
+
+# The bridge (our server) sees everything.
+user bridge
+topic readwrite monaid/#
