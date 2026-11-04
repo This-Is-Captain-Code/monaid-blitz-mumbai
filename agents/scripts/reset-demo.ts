@@ -98,7 +98,7 @@ const up = await fetch(`${BASE}/health`).then((r) => r.ok).catch(() => false);
 if (up) {
   await fetch(`${BASE}/admin/reset-seq`, { method: "POST", headers: H, body: "{}" });
   const k = await fetch(`${BASE}/admin/kill`, { method: "POST", headers: H, body: JSON.stringify({ engaged: false }) }).then((r) => r.json());
-  console.log(`   API up at ${BASE}: seqs reset, kill switch ${k.engaged ? "ENGAGED" : "off"} (restart the API to clear pending approvals)`);
+  console.log(`   API up at ${BASE}: duplicate cache cleared, kill switch ${k.engaged ? "ENGAGED" : "off"} (restart the API to clear pending approvals)`);
 } else {
   const f = join(AGENTS_DIR, "logs", "seq.json");
   if (existsSync(f)) rmSync(f);
