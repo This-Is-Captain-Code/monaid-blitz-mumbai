@@ -1,0 +1,19 @@
+{
+  "network": {
+    "name": "Monad Testnet",
+    "chainId": 10143,
+    "rpcUrl": "https://testnet-rpc.monad.xyz",
+    "txExplorer": "https://testnet.monadscan.com/tx/",
+    "addressExplorer": "https://testnet.monadvision.com/address/"
+  },
+  "robots": [
+    { "id": "1", "agent": "AGENT_1" },
+    { "id": "2", "agent": "AGENT_2" }
+  ],
+  "funding": {
+    "deployerFloorMon": "12",
+    "agentGasFloorMon": "1",
+    "agentTopupTargetMon": "3",
+    "agentTopupDailyCapMon": "10"
+  }
+}

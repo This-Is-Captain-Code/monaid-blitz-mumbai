@@ -24,7 +24,7 @@ async function main() {
   const coreAddress = getAddress(shared.monadTestnet.MonaidCore.address);
 
   const [deployer, agent] = await hre.viem.getWalletClients();
-  if (!deployer || !agent) throw new Error("Need DEPLOYER and AGENT_1 keys in contracts/.env");
+  if (!deployer || !agent) throw new Error("Need DEPLOYER and AGENT_1 keys in agents/.env");
   const pub = await hre.viem.getPublicClient();
   const asOwner = await hre.viem.getContractAt("MonaidCore", coreAddress, { client: { wallet: deployer } });
   const asAgent = await hre.viem.getContractAt("MonaidCore", coreAddress, { client: { wallet: agent } });

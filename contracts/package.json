@@ -4,11 +4,12 @@
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
-    "wallet:new": "ts-node scripts/new-wallet.ts",
     "balance": "hardhat run scripts/balance.ts --network monadTestnet",
     "deploy:testnet": "hardhat ignition deploy ignition/modules/MonaidCore.ts --network monadTestnet",
     "verify:testnet": "hardhat verify --network monadTestnet",
-    "demo:pay": "hardhat run scripts/demo-pay.ts --network monadTestnet"
+    "demo:pay": "hardhat run scripts/demo-pay.ts --network monadTestnet",
+    "reserve:check": "hardhat run scripts/reserve-check.ts --network monadTestnet",
+    "export:abi": "hardhat run scripts/export-abi.ts"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-ignition-viem": "^0.15.17",

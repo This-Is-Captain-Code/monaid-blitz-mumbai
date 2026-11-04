@@ -1,0 +1,22 @@
+{
+  "name": "monaid-agents",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "wallet:new": "tsx scripts/wallet-new.ts",
+    "wallets": "tsx scripts/wallets.ts",
+    "register:robots": "tsx scripts/register-robots.ts",
+    "fund:robot": "tsx scripts/fund-robot.ts",
+    "topup:agents": "tsx scripts/topup-agents.ts"
+  },
+  "dependencies": {
+    "dotenv": "^18.0.9",
+    "viem": "^2.57.16"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "tsx": "^4.23.15",
+    "typescript": "~5.8"
+  }
+}
