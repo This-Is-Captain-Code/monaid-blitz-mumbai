@@ -38,7 +38,8 @@ Event kinds today:
 | `recover` | Watcher release | `{sim:true}` | recovered from simulated crash |
 | `click` | Watcher knob click | `{}` | worker confirm (claim) |
 | `knob` | Watcher rotation | `{pos}` | dial position |
-| `key` | T-Deck keyboard | `{key:"a"}` | keypress (claim/typing) |
+| `claim` | T-Deck keyboard | `{text:"RAJ-7"}` | typed carrier/worker id, sent on Enter |
+| `power` | Watcher USB sense | `{on:true, charging:true}` | Charger-module proof: the wire went live |
 
 Notes: `seq` is per-boot monotonic (resets on reboot — a reset is itself a signal). `ts` is device
 SNTP time, may be unsynced right after boot; trust your own receive time. `data` is untrusted input.
