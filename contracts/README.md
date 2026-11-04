@@ -14,14 +14,13 @@ Hardhat 2 + viem, configured for **Monad Testnet** (chain ID `10143`, EVM target
 ```sh
 cd contracts
 npm install
-npm run wallet:new            # creates DEPLOYER + AGENT_1, keys go straight into .env
-npm run wallet:new -- AGENT_2 # add another named wallet
 ```
 
-`wallet:new` prints addresses only and never overwrites an existing key. `.env` is git-ignored — never commit it.
+Keys are read from **`agents/.env`** (the one place keys live). Create wallets there with
+`npm run wallet:new -- <NAME>` in `agents/` — it prints addresses only and never overwrites a key.
 
 1. Fund the printed addresses with testnet MON at https://faucet.monad.xyz.
-2. `npm run balance` — shows every wallet and its MON balance.
+2. `npm run balance` — shows DEPLOYER and AGENT_1 balances (full table: `npm run wallets` in `agents/`).
 
 ## Develop & deploy
 
