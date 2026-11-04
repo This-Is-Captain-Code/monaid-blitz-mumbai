@@ -15,7 +15,9 @@
     "time:pay": "tsx scripts/time-pay.ts",
     "check:refusals": "tsx scripts/check-refusals.ts",
     "recover:v0": "tsx scripts/recover-v0.ts",
-    "time:settle": "tsx scripts/time-settle.ts"
+    "time:settle": "tsx scripts/time-settle.ts",
+    "check:oog": "tsx scripts/check-oog.ts",
+    "recover:core": "tsx scripts/recover-core.ts"
   },
   "dependencies": {
     "dotenv": "^18.0.9",

@@ -146,6 +146,12 @@ export function isNetworkError(err: unknown): boolean {
 
 const isNonceTooLow = (err: unknown) => /nonce too low|already known|known transaction/i.test(String((err as Error)?.message ?? err));
 
+/** Out-of-gas, as opposed to a revert: no revert data and an out-of-gas style message. */
+export function isOutOfGas(err: unknown): boolean {
+  if (!err || revertData(err)) return false;
+  return /out of gas|gas required exceeds|intrinsic gas too low|OutOfGas/i.test(String((err as Error)?.message ?? err));
+}
+
 async function withNetworkRetry<T>(what: string, fn: () => Promise<T>): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -197,7 +203,7 @@ export function sendTx(req: TxRequest): Promise<TxResult> {
   return enqueue(req.wallet, () => sendNow(req));
 }
 
-async function sendNow(req: TxRequest): Promise<TxResult> {
+async function sendNow(req: TxRequest, opts: { forceEstimate?: boolean } = {}): Promise<TxResult> {
   const startedAt = performance.now();
   const client = walletClient(req.wallet);
   const from = client.account.address;
@@ -213,6 +219,15 @@ async function sendNow(req: TxRequest): Promise<TxResult> {
     args: req.args ?? [],
     value: formatEther(value),
     reason: req.reason ?? null,
+  };
+
+  const logOutOfGas = (stage: "preflight" | "onchain", gas: bigint, hash?: Hash, fee?: bigint) => {
+    const msg =
+      `OUT OF GAS: fixed gas limit ${gas} for "${req.action}" is too small (${stage}` +
+      `${hash ? `, ${fee ? formatEther(fee) + " MON spent, " : ""}${txLink(hash)}` : ", nothing sent"}). ` +
+      `Retrying once with estimation — raise tx.fixedGas.${req.action} in agents/config.json.`;
+    console.warn(`⚠ ${msg}`);
+    audit({ ...base, result: "out-of-gas", stage, gas: gas.toString(), hash: hash ?? null, link: hash ? txLink(hash) : null, fee: fee ? formatEther(fee) : null, retry: "estimate" });
   };
 
   const fail = (stage: TxRevertedError["stage"], err: unknown, hash?: Hash): never => {
@@ -242,12 +257,23 @@ async function sendNow(req: TxRequest): Promise<TxResult> {
 
     // 1. gas: a fixed per-action limit from config, or estimate +15% (estimation reverts with the same custom
     //    error as a simulation, so it doubles as the pre-check; a separate simulate is optional).
-    let gas: bigint;
-    const fixed = TX_CFG.fixedGas[req.action];
+    let gas: bigint | undefined;
+    const fixed = opts.forceEstimate ? undefined : TX_CFG.fixedGas[req.action];
     if (fixed) {
       gas = BigInt(fixed);
-      if (TX_CFG.fixedGasPreflight) await simulate();
-    } else {
+      if (TX_CFG.fixedGasPreflight) {
+        // Simulate WITH the fixed limit, so a too-small limit shows up here (no gas spent), not on-chain.
+        try {
+          await withNetworkRetry("simulate", () => publicClient.call({ account: from, to: req.to, data, value, gas }));
+        } catch (e) {
+          if (isNetworkError(e)) throw e;
+          if (!isOutOfGas(e)) fail("simulate", e);
+          logOutOfGas("preflight", gas);
+          gas = undefined; // fall through to estimation below
+        }
+      }
+    }
+    if (gas === undefined) {
       if (TX_CFG.separateSimulate) await simulate();
       try {
         const est = await withNetworkRetry("estimateGas", () => publicClient.estimateGas({ account: from, to: req.to, data, value }));
@@ -297,12 +323,19 @@ async function sendNow(req: TxRequest): Promise<TxResult> {
       const confirmMs = Math.round(performance.now() - sentAt);
       const fee = gas * receipt.effectiveGasPrice;
       if (receipt.status !== "success") {
-        // replay to recover the custom error name
+        // replay without a gas limit to recover the custom error name
         let decoded: unknown;
+        let replayOk = false;
         try {
           await publicClient.call({ account: from, to: req.to, data, value, blockNumber: receipt.blockNumber });
+          replayOk = true;
         } catch (e) {
           decoded = e;
+        }
+        // Fixed limit too small: the same call succeeds with enough gas → out-of-gas. Retry ONCE with estimation.
+        if (fixed && !opts.forceEstimate && (replayOk || isOutOfGas(decoded))) {
+          logOutOfGas("onchain", gas, hash, fee);
+          return sendNow(req, { forceEstimate: true });
         }
         return fail("onchain", decoded ?? new Error("execution reverted"), hash);
       }

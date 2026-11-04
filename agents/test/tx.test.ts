@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { BaseError, HttpRequestError, encodeErrorResult, RawContractError, TimeoutError } from "viem";
 import { CORE_ABI } from "../src/chain.js";
-import { decodeRevert, isNetworkError } from "../src/tx.js";
+import { decodeRevert, isNetworkError, isOutOfGas } from "../src/tx.js";
 
 const revertWith = (errorName: string, args: readonly unknown[] = []) =>
   new BaseError("Execution reverted", {
@@ -29,4 +29,13 @@ test("network errors are retryable; reverts are not", () => {
   assert.equal(isNetworkError(new Error("429 Too Many Requests")), true);
   assert.equal(isNetworkError(revertWith("NotRobotAgent")), false);
   assert.equal(isNetworkError(new Error("execution reverted")), false);
+});
+
+test("out-of-gas is told apart from a revert (triggers one retry with estimation)", () => {
+  assert.equal(isOutOfGas(new Error("out of gas")), true);
+  assert.equal(isOutOfGas(new Error("gas required exceeds allowance (30000)")), true);
+  assert.equal(isOutOfGas(new Error("intrinsic gas too low")), true);
+  assert.equal(isOutOfGas(revertWith("ClaimExpired")), false);
+  assert.equal(isOutOfGas(new Error("execution reverted")), false);
+  assert.equal(isOutOfGas(undefined), false);
 });
